@@ -1,0 +1,26 @@
+id: ipu3-imgu-grableak
+name: ipu3-imgu pipe_mode grab leak (out-of-tree module)
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  imgu_vb2_start_streaming() grabs the pipe_mode control via s_stream(1), then
+  returns 0 even when imgu_s_stream() failed. imgu->streaming therefore stays
+  false, and the ungrab in the stop path is gated on that flag, so it never
+  runs. The control is left permanently grabbed and every later attempt to
+  configure the device fails with EBUSY until reboot.
+
+  Because ipu3-imgu is a module rather than built-in, this can be fixed by
+  building a patched copy of just that driver against the running kernel's
+  headers and registering it with DKMS - no full kernel rebuild, and DKMS
+  redoes it automatically when the kernel changes.
+danger: |
+  Replaces a kernel driver with a locally built one. The original module is
+  left in place and DKMS can be removed to restore it, but a module that fails
+  to load will leave the camera unavailable until reverted.
+
+  Requires headers for the RUNNING kernel. Without them nothing is attempted.
+notes: |
+  Recovering a wedged device without this fix: unbind and rebind the ImgU, or
+  reboot. The leak is cleared either way; this stops it recurring.
