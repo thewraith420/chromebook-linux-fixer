@@ -1,0 +1,26 @@
+id: ipu3-imgu-iommu
+name: IPU3 ImgU IOMMU passthrough (KERNEL - prevents hard lockup)
+risk: high
+reverts_cleanly: false
+danger: |
+  THIS CONCERNS A FAULT THAT HARD LOCKS THE MACHINE.
+  On the reference hardware, streaming the ImgU without an IOMMU passthrough
+  domain locked the machine solid three times: no panic, no oops, nothing in
+  the journal or pstore, and a forced power-off each time. One of those resets
+  left the boot filesystem dirty.
+  This entry only DETECTS the condition. It deliberately cannot apply the fix,
+  because the remedy is a kernel patch or a bootloader change and neither
+  belongs to an automated tool.
+applies_to:
+  chromebook: true
+description: |
+  The staging ipu3-imgu driver bypasses the DMA API and programs the ImgU's own
+  MMU with raw physical addresses. That is only valid when the device sits in an
+  IOMMU identity/passthrough domain. In the kernel's default translated domain,
+  VT-d re-translates those addresses, finds no mapping, and the machine HARD
+  LOCKS on the ImgU's first DMA - no panic, no oops, nothing in the journal.
+notes: |
+  This fix is KERNEL SIDE and cannot be applied from userspace. It is either a
+  per-device passthrough quirk for 8086:1919 (preferred) or iommu=pt on the
+  kernel command line. Until one is present, do not run any libcamera build
+  containing the ipu3 pipeline handler: it will lock the machine.

@@ -1,0 +1,14 @@
+id: waydroid-netfilter
+name: Waydroid network start on kernels without legacy iptables
+risk: low
+danger: |
+  Edits a file owned by the waydroid package. A waydroid upgrade will overwrite
+  it, silently undoing this fix; re-run apply afterwards. The original is kept
+  alongside as waydroid-net.sh.chromebook-fixer.orig and revert restores it.
+applies_to: {}
+description: |
+  Waydroid's network script prefers iptables-legacy, which needs the
+  ip_tables kernel module. Kernels built without CONFIG_NETFILTER_XTABLES_LEGACY
+  cannot load it, so the container fails to start with
+  "Command failed: waydroid-net.sh start". The nft-backed iptables works fine;
+  the script simply tries the wrong one first.

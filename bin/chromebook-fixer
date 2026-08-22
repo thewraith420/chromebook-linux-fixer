@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""chromebook-fixer — hardware enablement fixes for Chromebooks running Linux.
+
+    chromebook-fixer status              what this machine needs
+    chromebook-fixer list                every known fix
+    chromebook-fixer apply <id>|--all    install
+    chromebook-fixer verify <id>         check it is still working
+    chromebook-fixer revert <id>         undo
+
+Nothing is applied without being asked for, and no fix runs unless its own
+detect script says the problem is actually present on this machine.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from registry import Machine, load_fixes, STATE_DIR  # noqa: E402
+
+DISCLAIMER = """\
+chromebook-fixer makes LOW-LEVEL CHANGES to this system.
+
+Depending on the fix, that can mean replacing system libraries, editing udev
+rules, patching vendor scripts, or altering kernel behaviour. Some fixes touch
+hardware that is poorly supported on Linux, and a bad interaction can HARD LOCK
+the machine, requiring a forced power-off. A forced power-off can corrupt a
+filesystem or lose unsaved work.
+
+This tool is developed and tested on ONE machine (Google Nocturne). Fixes are
+gated on hardware detection, but detection is imperfect and your hardware may
+differ in ways the author never saw.
+
+  * Read what a fix does before applying it: chromebook-fixer list -v
+  * Every fix that can be reverted says so; some cannot be.
+  * Save your work before applying anything marked HIGH RISK.
+  * There is NO WARRANTY. You are responsible for your own machine.
+"""
+
+
+def first_run_gate(c):
+    """Require an explicit acknowledgement once, before anything is applied."""
+    stamp = STATE_DIR / "disclaimer-accepted"
+    if stamp.exists():
+        return True
+    print(c("=" * 72, YELLOW))
+    print(c(DISCLAIMER, YELLOW))
+    print(c("=" * 72, YELLOW))
+    try:
+        reply = input("Type 'I understand' to continue: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    if reply != "i understand":
+        print("Not acknowledged; nothing was changed.")
+        return False
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp.write_text("acknowledged\n")
+    print(c("Acknowledged. This will not be asked again.\n", DIM))
+    return True
+
+BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
+RED, GREEN, YELLOW, BLUE = "\033[31m", "\033[32m", "\033[33m", "\033[34m"
+
+STATE_STYLE = {
+    "applied": (GREEN, "applied"),
+    "needed": (YELLOW, "NEEDED"),
+    "ok": (DIM, "not needed"),
+    "unknown": (DIM, "unknown"),
+}
+
+
+def colour(enabled):
+    return (lambda s, c: f"{c}{s}{RESET}") if enabled else (lambda s, c: s)
+
+
+def cmd_status(args, machine, fixes, c):
+    print(f"{c(machine.describe(), BOLD)}")
+    print(f"  kernel {machine.kernel}")
+    if not machine.is_chromebook:
+        print(c("  warning: this does not look like a Chromebook "
+                "(no coreboot, no GOOG* ACPI devices)", YELLOW))
+    print()
+
+    applicable = [f for f in fixes if f.matches(machine)]
+    if not applicable:
+        print("No fixes are known for this machine.")
+        return 0
+
+    other = len(fixes) - len(applicable)
+    needed = 0
+    for fix in applicable:
+        state, detail = fix.status()
+        col, label = STATE_STYLE[state]
+        if state == "needed":
+            needed += 1
+        state_label = f"{label:>10}"
+        print(f"  {c(state_label, col)}  {fix.id:<28} {fix.name}")
+        if detail and state in ("needed", "unknown"):
+            for line in detail.splitlines()[:2]:
+                print(f"              {c(line, DIM)}")
+
+    print()
+    if needed:
+        print(f"{needed} fix(es) needed. Apply with: "
+              f"{c('chromebook-fixer apply <id>', BOLD)}")
+    else:
+        print(c("Everything applicable is already in place.", GREEN))
+    if other:
+        print(c(f"({other} further fix(es) exist for other hardware)", DIM))
+    return 0
+
+
+def cmd_list(args, machine, fixes, c):
+    for fix in fixes:
+        mark = " " if fix.matches(machine) else c("·", DIM)
+        risk = {"low": GREEN, "medium": YELLOW, "high": RED}.get(fix.risk, DIM)
+        risk_label = f"{fix.risk:<7}"
+        print(f"{mark} {fix.id:<28} {c(risk_label, risk)} {fix.name}")
+        if args.verbose and fix.description:
+            for line in fix.description.splitlines():
+                print(f"      {c(line, DIM)}")
+    print()
+    print(c("· = not applicable to this machine", DIM))
+    return 0
+
+
+def _run_one(fix, action, c, assume_yes=False):
+    if not fix.has(action):
+        print(c(f"{fix.id}: no {action} script", DIM))
+        return 1
+
+    if action == "apply":
+        state, _ = fix.status()
+        if state == "applied":
+            print(c(f"{fix.id}: already applied", GREEN))
+            return 0
+        if state == "ok":
+            print(c(f"{fix.id}: not needed on this machine, skipping", DIM))
+            return 0
+        if fix.danger or fix.risk == "high":
+            print()
+            print(c("  " + "!" * 68, RED))
+            print(c(f"  HIGH RISK: {fix.name}", RED + BOLD)
+                  if fix.risk == "high" else c(f"  WARNING: {fix.name}", YELLOW))
+            for line in (fix.danger or fix.notes or "").splitlines():
+                print(c(f"  {line}", RED if fix.risk == "high" else YELLOW))
+            if not fix.reverts_cleanly:
+                print(c("  THIS FIX CANNOT BE CLEANLY REVERTED.", RED + BOLD))
+            if not fix.has("revert"):
+                print(c("  No revert script exists for this fix.", RED))
+            print(c("  " + "!" * 68, RED))
+
+        if fix.risk == "high" and not assume_yes:
+            # A bare y/N is too easy to hit by reflex for something that can
+            # hard lock the machine; require the fix id to be typed out.
+            print(f"  To proceed, type the fix id ({c(fix.id, BOLD)}), or "
+                  f"anything else to skip.")
+            try:
+                if input("  > ").strip() != fix.id:
+                    print("  skipped")
+                    return 0
+            except (EOFError, KeyboardInterrupt):
+                print("\n  skipped")
+                return 0
+
+    print(f"{c(action, BOLD)} {fix.id} … ", end="", flush=True)
+    code, out = fix.run(action)
+    print(c("ok", GREEN) if code == 0 else c(f"failed ({code})", RED))
+    if out:
+        for line in out.splitlines():
+            print(f"    {line}")
+
+    if code == 0 and action == "apply" and fix.has("verify"):
+        vcode, vout = fix.run("verify")
+        if vcode == 0:
+            print(c("    verified", GREEN))
+        else:
+            print(c("    applied but verification FAILED — check manually", RED))
+            if vout:
+                print(f"    {vout}")
+            return 1
+    return code
+
+
+def cmd_action(args, machine, fixes, c):
+    action = args.command
+    if getattr(args, "all", False):
+        targets = [f for f in fixes if f.matches(machine)]
+    else:
+        wanted = set(args.fix or [])
+        targets = [f for f in fixes if f.id in wanted]
+        missing = wanted - {f.id for f in targets}
+        for m in missing:
+            print(c(f"unknown fix: {m}", RED))
+        if missing:
+            return 2
+        for f in targets:
+            if not f.matches(machine) and not args.force:
+                print(c(f"{f.id}: not applicable to this machine "
+                        f"(use --force to override)", YELLOW))
+                return 2
+
+    if not targets:
+        print("Nothing to do.")
+        return 0
+
+    worst = 0
+    for fix in targets:
+        worst = max(worst, _run_one(fix, action, c, args.yes))
+    return worst
+
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="chromebook-fixer",
+        description="Hardware enablement fixes for Chromebooks running Linux.")
+    p.add_argument("--no-colour", action="store_true")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("status", help="what this machine needs")
+
+    pl = sub.add_parser("list", help="every known fix")
+    pl.add_argument("-v", "--verbose", action="store_true")
+
+    for name, helptext in (("apply", "install a fix"),
+                           ("verify", "check a fix is working"),
+                           ("revert", "undo a fix")):
+        sp = sub.add_parser(name, help=helptext)
+        sp.add_argument("fix", nargs="*")
+        sp.add_argument("--all", action="store_true",
+                        help="every fix applicable to this machine")
+        sp.add_argument("--force", action="store_true",
+                        help="ignore hardware matching")
+        sp.add_argument("-y", "--yes", action="store_true",
+                        help="do not prompt for high-risk fixes")
+
+    args = p.parse_args()
+    c = colour(sys.stdout.isatty() and not args.no_colour)
+    machine = Machine.detect()
+    fixes = load_fixes()
+
+    if args.command == "status":
+        return cmd_status(args, machine, fixes, c)
+    if args.command == "list":
+        return cmd_list(args, machine, fixes, c)
+    if not args.fix and not args.all:
+        print("specify a fix id, or --all")
+        return 2
+    if args.command in ("apply", "revert") and not first_run_gate(c):
+        return 1
+    return cmd_action(args, machine, fixes, c)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

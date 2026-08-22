@@ -1,0 +1,16 @@
+id: ipu3-vcm-focus
+name: Rear camera focus default (ak7375 VCM)
+risk: low
+danger: |
+  Installs a udev rule that runs v4l2-ctl when the lens actuator appears.
+  Low risk: it only moves a camera lens, and revert removes the rule cleanly.
+applies_to:
+  chromebook: true
+description: |
+  The ak7375 voice-coil lens actuator powers on at position 0, hard against one
+  end of its travel, which leaves the rear camera a complete blur. Nothing moves
+  it automatically unless an autofocus algorithm is running, so a udev rule sets
+  a usable default when the device appears.
+notes: |
+  Superseded in practice once libcamera's ipu3 IPA drives autofocus, but it
+  still governs the position at boot and whenever nothing has claimed the lens.
