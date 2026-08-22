@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""chromebook-camera-rotate — present an upright camera to every application.
+
+A camera sensor is bolted to the chassis, so when a convertible is rotated the
+sensor rotates with it. libcamera reports only the sensor's *mounting* rotation,
+which is a constant; nothing in the pipeline knows which way the device is
+currently being held. Desktop camera applications do not combine the two, so on
+a rotated screen the picture arrives sideways.
+
+Rather than wait for every application to learn about tablets, this republishes
+the camera through a loopback device with the rotation already applied:
+
+    libcamerasrc -> videoflip -> v4l2loopback -> any application
+
+videoflip's video-direction can be changed while the pipeline is PLAYING, so
+rotation follows the accelerometer live without interrupting the stream.
+
+Cost: one extra copy and a rotation per frame. Keep the resolution modest.
+"""
+
+import signal
+import sys
+
+import gi
+
+gi.require_version("Gst", "1.0")
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib, Gst  # noqa: E402
+
+SENSOR_NAME = "net.hadess.SensorProxy"
+SENSOR_PATH = "/net/hadess/SensorProxy"
+
+# GstVideoOrientationMethod. The camera must rotate *opposite* to the screen:
+# when the device turns left, the scene turns right within the sensor frame.
+GST_IDENTITY, GST_90R, GST_180, GST_90L = 0, 1, 2, 3
+
+ORIENTATION_TO_FLIP = {
+    "normal": GST_IDENTITY,
+    "left-up": GST_90R,
+    "bottom-up": GST_180,
+    "right-up": GST_90L,
+}
+
+DEFAULT_WIDTH = 1280
+DEFAULT_HEIGHT = 720
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def find_loopback():
+    """Find the v4l2loopback device we should publish into."""
+    import glob
+    import re
+    for node in sorted(glob.glob("/dev/video*")):
+        try:
+            with open(f"/sys/class/video4linux/{node.split('/')[-1]}/name") as fh:
+                name = fh.read().strip()
+        except OSError:
+            continue
+        if re.search(r"chromebook.?camera|v4l2 ?loopback|dummy", name, re.I):
+            return node
+    return None
+
+
+class CameraRotator:
+    def __init__(self, width, height, loopback):
+        self.system_bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.sensor = Gio.DBusProxy.new_sync(
+            self.system_bus, Gio.DBusProxyFlags.NONE, None,
+            SENSOR_NAME, SENSOR_PATH, SENSOR_NAME, None)
+
+        if not self.sensor.get_cached_property("HasAccelerometer"):
+            log("no accelerometer; nothing to follow")
+            sys.exit(0)
+
+        Gst.init(None)
+        # videoconvert both sides: libcamerasrc and v4l2sink rarely agree on a
+        # format, and videoflip only handles raw.
+        desc = (f"libcamerasrc ! "
+                f"video/x-raw,width={width},height={height} ! "
+                f"videoconvert ! videoflip name=flip ! videoconvert ! "
+                f"video/x-raw,format=YUY2 ! "
+                f"v4l2sink device={loopback} sync=false")
+        log(f"pipeline: {desc}")
+        self.pipeline = Gst.parse_launch(desc)
+        self.flip = self.pipeline.get_by_name("flip")
+
+        bus = self.pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self.on_error)
+
+        self.sensor.call_sync("ClaimAccelerometer", None,
+                              Gio.DBusCallFlags.NONE, -1, None)
+        self.sensor.connect("g-properties-changed", self.on_orientation)
+
+        self.pipeline.set_state(Gst.State.PLAYING)
+        self.apply_current()
+        log(f"publishing rotated camera on {loopback}")
+
+    def on_error(self, _bus, message):
+        err, debug = message.parse_error()
+        log(f"pipeline error: {err.message}")
+        if debug:
+            log(f"  {debug}")
+        self.pipeline.set_state(Gst.State.NULL)
+        sys.exit(1)
+
+    def on_orientation(self, _proxy, changed, _invalidated):
+        if "AccelerometerOrientation" in changed.unpack():
+            self.apply_current()
+
+    def apply_current(self):
+        prop = self.sensor.get_cached_property("AccelerometerOrientation")
+        if prop is None:
+            return
+        orientation = prop.get_string()
+        direction = ORIENTATION_TO_FLIP.get(orientation)
+        if direction is None:
+            return
+        # Safe while PLAYING: videoflip declares video-direction changeable in
+        # any state, so the stream is never interrupted.
+        self.flip.set_property("video-direction", direction)
+        log(f"orientation {orientation} -> video-direction {direction}")
+
+    def stop(self):
+        self.pipeline.set_state(Gst.State.NULL)
+        try:
+            self.sensor.call_sync("ReleaseAccelerometer", None,
+                                  Gio.DBusCallFlags.NONE, -1, None)
+        except GLib.Error:
+            pass
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--width", type=int, default=DEFAULT_WIDTH)
+    ap.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
+    ap.add_argument("--device", help="v4l2loopback node to publish into")
+    args = ap.parse_args()
+
+    loopback = args.device or find_loopback()
+    if not loopback:
+        log("no v4l2loopback device found.")
+        log("  sudo apt install v4l2loopback-dkms")
+        log("  sudo modprobe v4l2loopback card_label='Chromebook Camera' "
+            "exclusive_caps=1")
+        return 1
+
+    try:
+        rotator = CameraRotator(args.width, args.height, loopback)
+    except GLib.Error as err:
+        log(f"startup failed: {err.message}")
+        return 1
+
+    loop = GLib.MainLoop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig,
+                             lambda: (loop.quit(), False)[1])
+    try:
+        loop.run()
+    finally:
+        rotator.stop()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,35 @@
+id: camera-follow-rotation
+name: Camera image follows screen rotation
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+prefers:
+  - display-autorotate
+description: |
+  On a convertible the camera sensor is bolted to the chassis, so rotating the
+  device rotates the sensor with it. libcamera reports only the sensor's
+  mounting rotation, which is a constant - nothing in the pipeline knows which
+  way the device is currently held, and desktop camera applications do not
+  combine the two. Rotate the screen and the picture arrives sideways.
+
+  Rather than wait for every application to learn about tablets, this
+  republishes the camera through a loopback device with the rotation already
+  applied:
+
+      libcamerasrc -> videoflip -> v4l2loopback -> any application
+
+  videoflip's direction can be changed while the pipeline is playing, so
+  rotation follows the accelerometer live without interrupting the stream.
+  Applications then pick the loopback camera and are always upright, including
+  browsers and video-call software that would never handle this themselves.
+danger: |
+  Costs one extra frame copy and a rotation per frame; keep the resolution
+  modest on a low-power machine. Installs v4l2loopback, which builds a kernel
+  module via DKMS.
+
+  Applications must select the loopback camera rather than the real one. The
+  real camera stays available and unchanged.
+notes: |
+  Runs at 1280x720 by default. Raise it with --width/--height in the unit if
+  the machine can afford the CPU.
