@@ -48,7 +48,16 @@ chromebook-fixer list -v         # every known fix, with descriptions
 chromebook-fixer apply <id>      # install one
 chromebook-fixer verify <id>     # is it still working?
 chromebook-fixer revert <id>     # undo it
+
+chromebook-fixer apply --kernel list        # which kernels are installed
+chromebook-fixer apply <id> -k <version>    # target a specific kernel
 ```
+
+`--kernel` matters only for fixes that build or replace kernel modules;
+everything else ignores it. It is useful when the kernel you are running has no
+headers but another installed kernel does — you can build for that one, and the
+fix takes effect when you boot it. The tool says so explicitly rather than
+quietly producing a module that will not load.
 
 Nothing is applied unless you ask for it by name (or pass `--all`), **and** the
 fix's own detection says the problem is actually present on this machine.

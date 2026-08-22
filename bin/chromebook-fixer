@@ -12,6 +12,7 @@ detect script says the problem is actually present on this machine.
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -184,6 +185,48 @@ def _run_one(fix, action, c, assume_yes=False):
     return code
 
 
+def installed_kernels():
+    try:
+        return sorted(os.listdir("/lib/modules"))
+    except OSError:
+        return []
+
+
+def resolve_kernel(args, c):
+    """Validate --kernel and export it for the fix scripts."""
+    wanted = getattr(args, "kernel", None)
+    if not wanted:
+        return True
+
+    available = installed_kernels()
+    if wanted == "list":
+        print("Installed kernels:")
+        for k in available:
+            marks = []
+            if k == os.uname().release:
+                marks.append("running")
+            if Path(f"/lib/modules/{k}/build").exists():
+                marks.append("buildable")
+            suffix = f"  ({', '.join(marks)})" if marks else ""
+            print(f"  {k}{suffix}")
+        return False
+
+    if wanted not in available:
+        print(c(f"unknown kernel: {wanted}", RED))
+        print("Installed kernels:")
+        for k in available:
+            print(f"  {k}")
+        return False
+
+    os.environ["FIXER_KERNEL"] = wanted
+    if wanted != os.uname().release:
+        print(c(f"Targeting {wanted}, which is not the running kernel "
+                f"({os.uname().release}).", YELLOW))
+        print(c("Kernel-module changes will take effect when you boot it.", YELLOW))
+        print()
+    return True
+
+
 def cmd_action(args, machine, fixes, c):
     action = args.command
     if getattr(args, "all", False):
@@ -235,6 +278,10 @@ def main():
                         help="ignore hardware matching")
         sp.add_argument("-y", "--yes", action="store_true",
                         help="do not prompt for high-risk fixes")
+        sp.add_argument("-k", "--kernel", metavar="VERSION",
+                        help="target this kernel instead of the running one. "
+                             "Only kernel-module fixes use it; everything else "
+                             "ignores it. Use --kernel list to see the options.")
 
     args = p.parse_args()
     c = colour(sys.stdout.isatty() and not args.no_colour)
@@ -245,6 +292,9 @@ def main():
         return cmd_status(args, machine, fixes, c)
     if args.command == "list":
         return cmd_list(args, machine, fixes, c)
+    # --kernel list is a query, so answer it before demanding a fix id.
+    if not resolve_kernel(args, c):
+        return 0 if getattr(args, "kernel", None) == "list" else 2
     if not args.fix and not args.all:
         print("specify a fix id, or --all")
         return 2
