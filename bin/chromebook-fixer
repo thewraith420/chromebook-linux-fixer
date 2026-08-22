@@ -166,6 +166,29 @@ def _run_one(fix, action, c, assume_yes=False):
                 print("\n  skipped")
                 return 0
 
+    if action == "apply" and fix.prefers:
+        by_id = {f.id: f for f in load_fixes()}
+        unmet = []
+        for dep_id in fix.prefers:
+            dep = by_id.get(dep_id)
+            if dep and dep.status()[0] not in ("applied", "ok"):
+                unmet.append(dep)
+        if unmet and not assume_yes:
+            print()
+            print(c("  For the best result, apply these first:", YELLOW))
+            for dep in unmet:
+                print(c(f"    {dep.id}  —  {dep.name}", YELLOW))
+            print(c("  Applying without them still works, but with reduced"
+                    " capability.", YELLOW))
+            print(f"  Continue with {c(fix.id, BOLD)} anyway? [y/N] ", end="")
+            try:
+                if input().strip().lower() not in ("y", "yes"):
+                    print("  skipped — apply the prerequisite first, then retry")
+                    return 0
+            except (EOFError, KeyboardInterrupt):
+                print("\n  skipped")
+                return 0
+
     print(f"{c(action, BOLD)} {fix.id} … ", end="", flush=True)
     code, out = fix.run(action)
     print(c("ok", GREEN) if code == 0 else c(f"failed ({code})", RED))
@@ -231,6 +254,10 @@ def cmd_action(args, machine, fixes, c):
     action = args.command
     if getattr(args, "all", False):
         targets = [f for f in fixes if f.matches(machine)]
+        # Apply anything that is a prerequisite of another fix before the fix
+        # that wants it, so --all does not silently produce a degraded result.
+        wanted_first = {d for f in targets for d in f.prefers}
+        targets.sort(key=lambda f: (f.id not in wanted_first,))
     else:
         wanted = set(args.fix or [])
         targets = [f for f in fixes if f.id in wanted]

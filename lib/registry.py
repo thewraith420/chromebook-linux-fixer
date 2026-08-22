@@ -92,6 +92,9 @@ class Fix:
     notes: str = ""
     danger: str = ""
     reverts_cleanly: bool = True
+    # Fixes that should be applied first to get the best outcome. Not hard
+    # prerequisites: a fix must still work without them, just less well.
+    prefers: list = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path) -> "Fix | None":
@@ -110,6 +113,7 @@ class Fix:
             notes=(meta.get("notes") or "").strip(),
             danger=(meta.get("danger") or "").strip(),
             reverts_cleanly=bool(meta.get("reverts_cleanly", True)),
+            prefers=list(meta.get("prefers") or []),
         )
 
     # -- hardware matching -------------------------------------------------

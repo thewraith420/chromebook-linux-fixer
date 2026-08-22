@@ -4,6 +4,11 @@ risk: medium
 reverts_cleanly: true
 applies_to:
   chromebook: true
+prefers:
+  # Without an IOMMU-safe ImgU this falls back to the software ISP, which works
+  # but costs most of a CPU core and has no autofocus. Applying that fix first
+  # (a boot parameter and a reboot - no kernel rebuild) gets the hardware ISP.
+  - ipu3-imgu-iommu
 description: |
   Ubuntu's libcamera has no CameraSensorHelper for imx319 or imx355, so the IPU3
   IPA refuses both sensors and no cameras enumerate at all. Several further gaps

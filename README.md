@@ -38,6 +38,26 @@ Sensible precautions:
 
 You will be asked to acknowledge this once, before the first `apply`.
 
+## Getting the hardware ISP working (IPU3 cameras)
+
+The short version: **you do not need to rebuild a kernel.**
+
+```
+chromebook-fixer apply ipu3-imgu-iommu   # adds iommu=pt
+sudo reboot
+chromebook-fixer apply ipu3-camera       # now builds the HARDWARE path
+```
+
+The IPU3 hardware ISP only needs its device placed in an IOMMU passthrough
+domain, and a boot parameter does that. A per-device kernel quirk is tidier and
+needs no parameter, but it is an optimisation, not a requirement.
+
+Order matters. Applying `ipu3-camera` on a machine whose ImgU is still in a
+translated domain gets you the **software ISP** — which works, and cannot lock
+the machine, but costs most of a CPU core and has no autofocus. The tool warns
+you before that happens, and re-running after the IOMMU fix switches to
+hardware automatically.
+
 ---
 
 ## Usage
