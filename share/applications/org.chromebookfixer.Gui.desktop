@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Chromebook Fixer
+GenericName=Hardware Enablement
+Comment=Detect and apply hardware fixes for Chromebooks running Linux
+Exec=/home/bob/chromebook-fixer/bin/chromebook-fixer-gui
+Icon=preferences-system
+Terminal=false
+Categories=System;Settings;HardwareSettings;GTK;
+Keywords=chromebook;hardware;camera;fix;kernel;
+StartupNotify=true

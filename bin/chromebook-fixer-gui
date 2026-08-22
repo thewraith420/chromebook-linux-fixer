@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""chromebook-fixer-gui — a window over the chromebook-fixer CLI.
+
+Deliberately a front-end, not a reimplementation: it shells out to the same
+CLI, so detection, safety gating and the fix lifecycle have exactly one
+implementation. Anything the GUI can do, the CLI can do, and they cannot drift.
+"""
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, GLib, Gtk, Pango  # noqa: E402
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "lib"))
+from registry import Machine, load_fixes  # noqa: E402
+
+RISK_STYLE = {"low": "success", "medium": "warning", "high": "error"}
+STATE_TEXT = {
+    "applied": ("Applied", "success"),
+    "needed": ("Needed", "warning"),
+    "ok": ("Not needed", "dim-label"),
+    "unknown": ("Unknown", "dim-label"),
+}
+
+
+def askpass_env():
+    """
+    Fix scripts use sudo. In a GUI there is no terminal to type into, so point
+    sudo at a graphical askpass. Without one, apply would appear to hang.
+    """
+    env = dict(os.environ)
+    for helper in ("/usr/bin/ssh-askpass", "/usr/lib/ssh/x11-ssh-askpass",
+                   "/usr/bin/lxqt-openssh-askpass"):
+        if Path(helper).exists():
+            env["SUDO_ASKPASS"] = helper
+            break
+    return env
+
+
+class FixRow(Adw.ExpanderRow):
+    def __init__(self, fix, window):
+        super().__init__(title=fix.name, subtitle=fix.id)
+        self.fix = fix
+        self.window = window
+
+        self.state_label = Gtk.Label(label="checking…")
+        self.state_label.add_css_class("dim-label")
+        self.add_suffix(self.state_label)
+
+        risk = Gtk.Label(label=fix.risk)
+        risk.add_css_class(RISK_STYLE.get(fix.risk, "dim-label"))
+        risk.add_css_class("caption")
+        self.add_suffix(risk)
+
+        if fix.description:
+            self.add_row(self._text_row(fix.description))
+        if fix.danger:
+            warn = self._text_row(fix.danger)
+            warn.add_css_class("error")
+            self.add_row(warn)
+        if not fix.reverts_cleanly:
+            self.add_row(self._text_row("This fix cannot be cleanly reverted."))
+
+        actions = Adw.ActionRow()
+        box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        self.apply_btn = Gtk.Button(label="Apply")
+        self.apply_btn.add_css_class("suggested-action")
+        self.apply_btn.connect("clicked", lambda _b: window.run_action("apply", fix))
+        self.revert_btn = Gtk.Button(label="Revert")
+        self.revert_btn.connect("clicked", lambda _b: window.run_action("revert", fix))
+        box.append(self.apply_btn)
+        box.append(self.revert_btn)
+        actions.add_suffix(box)
+        self.add_row(actions)
+
+    @staticmethod
+    def _text_row(text):
+        row = Adw.ActionRow()
+        label = Gtk.Label(label=text.strip(), wrap=True, xalign=0,
+                          margin_top=6, margin_bottom=6)
+        label.add_css_class("caption")
+        row.set_child(label)
+        return row
+
+    def refresh(self):
+        state, detail = self.fix.status()
+        text, style = STATE_TEXT[state]
+        self.state_label.set_label(text)
+        for s in ("success", "warning", "dim-label"):
+            self.state_label.remove_css_class(s)
+        self.state_label.add_css_class(style)
+        if detail:
+            self.set_subtitle(f"{self.fix.id} — {detail.splitlines()[0]}")
+        self.apply_btn.set_sensitive(state in ("needed", "unknown")
+                                     and self.fix.has("apply"))
+        self.revert_btn.set_sensitive(state == "applied" and self.fix.has("revert"))
+
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Chromebook Fixer",
+                         default_width=760, default_height=720)
+        self.machine = Machine.detect()
+        self.rows = []
+
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        refresh = Gtk.Button(icon_name="view-refresh-symbolic",
+                             tooltip_text="Re-check everything")
+        refresh.connect("clicked", lambda _b: self.refresh_all())
+        header.pack_start(refresh)
+        toolbar.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+
+        info = Adw.PreferencesGroup(title="This machine")
+        info.add(self._row("Model", self.machine.describe()))
+        info.add(self._row("Kernel", self.machine.kernel))
+        if not self.machine.is_chromebook:
+            r = self._row("Warning",
+                          "This does not look like a Chromebook. Fixes are "
+                          "matched on hardware and most will not apply.")
+            r.add_css_class("warning")
+            info.add(r)
+        page.add(info)
+
+        self.group = Adw.PreferencesGroup(
+            title="Fixes",
+            description="Only fixes matching this hardware are shown. Nothing "
+                        "is changed until you press Apply.")
+        for fix in load_fixes():
+            if fix.matches(self.machine):
+                row = FixRow(fix, self)
+                self.rows.append(row)
+                self.group.add(row)
+        page.add(self.group)
+
+        toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
+        self.toasts = Adw.ToastOverlay(child=toolbar)
+        self.set_content(self.toasts)
+
+        GLib.idle_add(self.refresh_all)
+
+    @staticmethod
+    def _row(title, subtitle):
+        r = Adw.ActionRow(title=title, subtitle=subtitle)
+        r.set_subtitle_lines(0)
+        return r
+
+    def refresh_all(self):
+        for row in self.rows:
+            row.refresh()
+        return False
+
+    # -- running a fix ----------------------------------------------------
+
+    def run_action(self, action, fix):
+        """Confirm first for anything risky, then run it in a live output window."""
+        if action == "apply" and (fix.risk == "high" or fix.danger):
+            self._confirm(action, fix)
+        else:
+            self._execute(action, fix)
+
+    def _confirm(self, action, fix):
+        body = fix.danger or fix.notes or ""
+        if not fix.reverts_cleanly:
+            body += "\n\nThis fix cannot be cleanly reverted."
+        dialog = Adw.MessageDialog(
+            transient_for=self, heading=f"Apply {fix.name}?",
+            body=body.strip() or "This will change system configuration.")
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("go", "Apply")
+        dialog.set_response_appearance("go", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.connect("response", lambda _d, r:
+                       self._execute(action, fix) if r == "go" else None)
+        dialog.present()
+
+    def _execute(self, action, fix):
+        win = Adw.Window(transient_for=self, modal=True,
+                         default_width=680, default_height=440,
+                         title=f"{action} {fix.id}")
+        tv = Adw.ToolbarView()
+        tv.add_top_bar(Adw.HeaderBar())
+        buf = Gtk.TextBuffer()
+        view = Gtk.TextView(buffer=buf, editable=False, monospace=True,
+                            wrap_mode=Pango.WrapMode.WORD_CHAR)
+        tv.set_content(Gtk.ScrolledWindow(child=view, vexpand=True))
+        close = Gtk.Button(label="Close", margin_top=6, margin_bottom=6,
+                           margin_start=12, margin_end=12, sensitive=False)
+        close.connect("clicked", lambda _b: win.close())
+        tv.add_bottom_bar(close)
+        win.set_content(tv)
+        win.present()
+
+        def append(text):
+            buf.insert(buf.get_end_iter(), text)
+            return False
+
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        cmd = [cli, "--no-colour", action, fix.id, "--yes"]
+        append(f"$ {' '.join(cmd)}\n\n")
+
+        def worker():
+            try:
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, env=askpass_env())
+                for line in proc.stdout:
+                    GLib.idle_add(append, line)
+                proc.wait()
+                GLib.idle_add(append, f"\n[finished, exit {proc.returncode}]\n")
+            except Exception as exc:                      # noqa: BLE001
+                GLib.idle_add(append, f"\nfailed to run: {exc}\n")
+            GLib.idle_add(close.set_sensitive, True)
+            GLib.idle_add(self.refresh_all)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+
+class Application(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="org.chromebookfixer.Gui")
+
+    def do_activate(self):
+        Window(self).present()
+
+
+if __name__ == "__main__":
+    if not shutil.which("pkexec") and os.geteuid() != 0:
+        pass          # sudo + askpass is the path; pkexec is not required
+    sys.exit(Application().run(None))
