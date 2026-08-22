@@ -1,0 +1,38 @@
+id: ipu3-camera
+name: IPU3 cameras (imx319/imx355) in libcamera
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  Ubuntu's libcamera has no CameraSensorHelper for imx319 or imx355, so the IPU3
+  IPA refuses both sensors and no cameras enumerate at all. Several further gaps
+  sit behind that: the software ISP cannot decode IPU3-packed Bayer, the CIO2
+  advertises neither V4L2_CAP_IO_MC nor ENUM_FRAMESIZES so format negotiation
+  fails, the viewfinder role caps resolution at 720p which also forces the
+  sensor into a binned mode, and there are two out-of-bounds reads in the
+  software ISP's gamma table.
+
+  This builds a patched libcamera and installs it. It picks one of two paths:
+
+    hardware ISP  - needs an IOMMU-safe kernel. ~0% CPU, autofocus, best
+                    quality. Chosen automatically when it is safe.
+    software ISP  - works on ANY kernel, cannot lock the machine. Costs most
+                    of a CPU core and has no autofocus.
+
+  If the kernel cannot safely drive the hardware ISP, this installs the
+  software path and prints what would be needed to enable the hardware one.
+danger: |
+  Replaces libcamera system libraries under /usr. Anything using a camera -
+  browsers, video calls, Snapshot - depends on these. The files replaced are
+  backed up and revert restores them, but a failed build leaves the previous
+  install in place rather than a broken one.
+
+  Building libcamera takes 10-30 minutes on a Chromebook-class CPU.
+
+  The hardware ISP path is only ever selected when the ImgU is confirmed to be
+  in a safe IOMMU domain. It is never selected speculatively, because getting
+  that wrong hard locks the machine.
+notes: |
+  Needs the distro's libcamera build dependencies. On Debian/Ubuntu:
+  sudo apt build-dep libcamera

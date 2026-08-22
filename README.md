@@ -106,6 +106,11 @@ Guidelines that matter more than they look:
 - **Kernel-level fixes should be detect-only.** Ship the patch, detect whether
   the running kernel has it, and tell the user. A tool that rewrites your
   bootloader unprompted is not a tool worth trusting.
+- **Beware `cmd | grep -q` under `set -o pipefail`.** `grep -q` exits at the
+  first match, the producer takes SIGPIPE, and pipefail then reports the whole
+  pipeline as failed *even though the match succeeded*. This silently made a
+  verify script misreport which ISP was in use. Capture output to a variable
+  first, then match against it.
 - **Write the `danger` field from experience.** Generic caution teaches nobody
   anything; "this locked the machine three times and left the boot filesystem
   dirty" tells someone exactly how much care to take.

@@ -1,0 +1,874 @@
+--- a/src/ipa/libipa/camera_sensor_helper.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/ipa/libipa/camera_sensor_helper.cpp	2026-08-18 23:26:07.417929856 -0400
+@@ -600,6 +600,22 @@
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx296", CameraSensorHelperImx296)
+ 
++class CameraSensorHelperImx319 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx319()
++	{
++		/*
++		 * Same ISP generation/register map as imx355 (0x0204,
++		 * 0-960): "Analog gain = 1024/(1024 - reg) times" per the
++		 * ChromeOS kernel driver.
++		 */
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx319", CameraSensorHelperImx319)
++
+ class CameraSensorHelperImx327 : public CameraSensorHelperImx290
+ {
+ };
+@@ -617,6 +633,18 @@
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx335", CameraSensorHelperImx335)
+ 
++class CameraSensorHelperImx355 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx355()
++	{
++		/* From datasheet: 64 at 10bits. */
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx355", CameraSensorHelperImx355)
++
+ class CameraSensorHelperImx415 : public CameraSensorHelper
+ {
+ public:
+--- a/src/libcamera/software_isp/debayer_cpu.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/libcamera/software_isp/debayer_cpu.cpp	2026-08-19 16:43:24.752247075 -0400
+@@ -289,6 +289,65 @@
+ }
+ 
+ /*
++ * The Intel IPU3 CIO2 CSI-2 receiver can only produce IPU3-packed Bayer, and
++ * none of the debayering paths below understand that packing. Rather than add
++ * a full set of IPU3 inner loops - awkward because a group is 25 pixels in 32
++ * bytes, so the 2-pixel Bayer pattern only realigns every 50 pixels - the
++ * frame is unpacked once into plain 16-bit samples and then run through the
++ * existing, well-tested unpacked 10-bit path.
++ */
++constexpr unsigned int kIpu3GroupPixels = 25;
++constexpr unsigned int kIpu3GroupBytes = 32;
++
++/*
++ * Map an IPU3-packed format onto its unpacked equivalent so that all format
++ * negotiation and function selection can treat it as ordinary Bayer. Any
++ * other format is returned unchanged.
++ */
++static PixelFormat ipu3UnpackedFormat(const PixelFormat &format)
++{
++	const BayerFormat bayer = BayerFormat::fromPixelFormat(format);
++
++	if (bayer.packing != BayerFormat::Packing::IPU3)
++		return format;
++
++	return BayerFormat(bayer.order, bayer.bitDepth,
++			   BayerFormat::Packing::None)
++		.toPixelFormat();
++}
++
++static bool isIpu3Packed(const PixelFormat &format)
++{
++	return BayerFormat::fromPixelFormat(format).packing ==
++	       BayerFormat::Packing::IPU3;
++}
++
++/* Bytes per line once unpacked to 16-bit samples. */
++static unsigned int ipu3UnpackedStride(unsigned int packedStride)
++{
++	return packedStride / kIpu3GroupBytes * kIpu3GroupPixels * 2;
++}
++
++/*
++ * Unpack IPU3 data: each 32-byte group holds 25 densely packed 10-bit
++ * samples. Mirrors utils/ipu3/ipu3-unpack.c.
++ */
++static void ipu3UnpackLine(const uint8_t *src, uint16_t *dst,
++			   unsigned int groups)
++{
++	for (unsigned int g = 0; g < groups; g++, src += kIpu3GroupBytes) {
++		for (unsigned int i = 0; i < kIpu3GroupPixels; i++) {
++			const unsigned int index = i * 10 / 8;
++			const unsigned int lsbShift = i * 10 % 8;
++			const unsigned int msbShift = 8 - lsbShift;
++
++			*dst++ = ((src[index + 1] << msbShift) & 0x3ff) |
++				 ((src[index] >> lsbShift) & 0x3ff);
++		}
++	}
++}
++
++/*
+  * Setup the Debayer object according to the passed in parameters.
+  * Return 0 on success, a negative errno value on failure
+  * (unsupported parameters).
+@@ -296,7 +355,7 @@
+ int DebayerCpu::getInputConfig(PixelFormat inputFormat, DebayerInputConfig &config)
+ {
+ 	BayerFormat bayerFormat =
+-		BayerFormat::fromPixelFormat(inputFormat);
++		BayerFormat::fromPixelFormat(ipu3UnpackedFormat(inputFormat));
+ 
+ 	if ((bayerFormat.bitDepth == 8 || bayerFormat.bitDepth == 10 || bayerFormat.bitDepth == 12) &&
+ 	    bayerFormat.packing == BayerFormat::Packing::None &&
+@@ -390,7 +449,7 @@
+ 				    bool ccmEnabled)
+ {
+ 	BayerFormat bayerFormat =
+-		BayerFormat::fromPixelFormat(inputFormat);
++		BayerFormat::fromPixelFormat(ipu3UnpackedFormat(inputFormat));
+ 	bool addAlphaByte = false;
+ 
+ 	xShift_ = 0;
+@@ -485,7 +544,20 @@
+ 	if (getInputConfig(inputCfg.pixelFormat, inputConfig_) != 0)
+ 		return -EINVAL;
+ 
+-	if (stats_->configure(inputCfg) != 0)
++	/*
++	 * IPU3-packed input is unpacked into an internal buffer before
++	 * debayering, so everything downstream - including the stats - sees
++	 * plain unpacked Bayer with the correspondingly larger stride.
++	 */
++	ipu3Unpack_ = isIpu3Packed(inputCfg.pixelFormat);
++
++	StreamConfiguration effectiveCfg = inputCfg;
++	if (ipu3Unpack_) {
++		effectiveCfg.pixelFormat = ipu3UnpackedFormat(inputCfg.pixelFormat);
++		effectiveCfg.stride = ipu3UnpackedStride(inputCfg.stride);
++	}
++
++	if (stats_->configure(effectiveCfg) != 0)
+ 		return -EINVAL;
+ 
+ 	const Size &statsPatternSize = stats_->patternSize();
+@@ -497,7 +569,16 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	inputConfig_.stride = inputCfg.stride;
++	inputConfig_.stride = effectiveCfg.stride;
++
++	if (ipu3Unpack_) {
++		ipu3PackedStride_ = inputCfg.stride;
++		ipu3Buffer_.resize(static_cast<size_t>(inputConfig_.stride) *
++				   inputCfg.size.height);
++		LOG(Debayer, Info)
++			<< "IPU3-packed input: unpacking " << inputCfg.stride
++			<< " -> " << inputConfig_.stride << " bytes per line";
++	}
+ 
+ 	if (outputCfgs.size() != 1) {
+ 		LOG(Debayer, Error)
+@@ -753,8 +834,17 @@
+ void DebayerCpu::updateGammaTable(DebayerParams &params)
+ {
+ 	const RGB<float> blackLevel = params.blackLevel;
+-	/* Take let's say the green channel black level */
+-	const unsigned int blackIndex = blackLevel[1] * gammaTable_.size();
++	/*
++	 * Take let's say the green channel black level.
++	 *
++	 * Clamp the index: blackLevel is normalised to [0,1] and a saturated
++	 * estimate of 1.0 would otherwise index one past the end of the table,
++	 * both in the std::fill() below and when reading gammaTable_[blackIndex].
++	 * Scenes with large blown-out highlights can drive the estimate there.
++	 */
++	const unsigned int blackIndex =
++		std::min<unsigned int>(blackLevel[1] * gammaTable_.size(),
++				       gammaTable_.size() - 1);
+ 	const float gamma = params.gamma;
+ 	const float contrastExp = params.contrastExp;
+ 
+@@ -822,12 +912,28 @@
+ 			auto &red = swapRedBlueGains_ ? blue_ : red_;
+ 			auto &green = green_;
+ 			auto &blue = swapRedBlueGains_ ? red_ : blue_;
++			/*
++			 * min() bounds the index from above, but a gain that
++			 * has gone negative or NaN - which the grey-world AWB
++			 * can produce on degenerate scenes, e.g. a frame that
++			 * is entirely blown out or entirely featureless -
++			 * would still convert to a huge unsigned value and
++			 * index out of the table. Clamp both ends; the
++			 * comparison form also rejects NaN.
++			 */
++			auto gammaIndex = [gammaTableSize](float value) -> unsigned int {
++				if (!(value >= 0.0f))
++					return 0;
++				return static_cast<unsigned int>(
++					std::min(value, static_cast<float>(gammaTableSize - 1)));
++			};
++
+ 			for (unsigned int i = 0; i < kRGBLookupSize; i++) {
+ 				/* Apply gamma after gain! */
+ 				const RGB<float> lutGains = (gains * i / div).min(gammaTableSize - 1);
+-				red[i] = gammaTable_[static_cast<unsigned int>(lutGains.r())];
+-				green[i] = gammaTable_[static_cast<unsigned int>(lutGains.g())];
+-				blue[i] = gammaTable_[static_cast<unsigned int>(lutGains.b())];
++				red[i] = gammaTable_[gammaIndex(lutGains.r())];
++				green[i] = gammaTable_[gammaIndex(lutGains.g())];
++				blue[i] = gammaTable_[gammaIndex(lutGains.b())];
+ 			}
+ 		}
+ 	}
+@@ -868,10 +974,26 @@
+ 
+ 	stats_->startFrame(frame);
+ 
++	const uint8_t *src = in.planes()[0].data();
++
++	if (ipu3Unpack_) {
++		const unsigned int groups = ipu3PackedStride_ / kIpu3GroupBytes;
++		const unsigned int lines = ipu3Buffer_.size() / inputConfig_.stride;
++
++		for (unsigned int y = 0; y < lines; y++)
++			ipu3UnpackLine(src + static_cast<size_t>(y) * ipu3PackedStride_,
++				       reinterpret_cast<uint16_t *>(
++					       ipu3Buffer_.data() +
++					       static_cast<size_t>(y) * inputConfig_.stride),
++				       groups);
++
++		src = ipu3Buffer_.data();
++	}
++
+ 	if (inputConfig_.patternSize.height == 2)
+-		process2(frame, in.planes()[0].data(), out.planes()[0].data());
++		process2(frame, src, out.planes()[0].data());
+ 	else
+-		process4(frame, in.planes()[0].data(), out.planes()[0].data());
++		process4(frame, src, out.planes()[0].data());
+ 
+ 	metadata.planes()[0].bytesused = out.planes()[0].size();
+ 
+--- a/src/libcamera/software_isp/debayer_cpu.h	2026-01-29 07:17:26.000000000 -0500
++++ b/src/libcamera/software_isp/debayer_cpu.h	2026-08-19 14:32:40.728574646 -0400
+@@ -148,6 +148,10 @@
+ 	unsigned int lineBufferIndex_;
+ 	unsigned int xShift_; /* Offset of 0/1 applied to window_.x */
+ 	bool enableInputMemcpy_;
++	/* IPU3-packed input is unpacked into ipu3Buffer_ before debayering */
++	bool ipu3Unpack_ = false;
++	unsigned int ipu3PackedStride_ = 0;
++	std::vector<uint8_t> ipu3Buffer_;
+ };
+ 
+ } /* namespace libcamera */
+--- a/src/libcamera/pipeline/simple/simple.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/libcamera/pipeline/simple/simple.cpp	2026-08-21 19:52:38.824600013 -0400
+@@ -32,6 +32,7 @@
+ #include <libcamera/pixel_format.h>
+ #include <libcamera/stream.h>
+ 
++#include "libcamera/internal/bayer_format.h"
+ #include "libcamera/internal/camera.h"
+ #include "libcamera/internal/camera_manager.h"
+ #include "libcamera/internal/camera_sensor.h"
+@@ -260,6 +261,19 @@
+ 	{ "imx7-csi", { { "pxp", 1 } }, true },
+ 	{ "intel-ipu6", {}, true },
+ 	{ "intel-ipu7", {}, true },
++#if !HAVE_PIPELINE_IPU3
++	/*
++	 * IPU3 CIO2: the CSI-2 receiver alone, with the staging ImgU ISP left
++	 * out of the pipeline entirely. Frames arrive as IPU3-packed Bayer,
++	 * which the software ISP unpacks (see debayer_cpu.cpp).
++	 *
++	 * Only claimed when the dedicated ipu3 handler is absent from this
++	 * build. Both handlers match the same media device, and this one would
++	 * win by registration order, silently reducing an IPU3 machine to a
++	 * software ISP even though its hardware ISP was compiled in.
++	 */
++	{ "ipu3-cio2", {}, true },
++#endif
+ 	{ "j721e-csi2rx", {}, true },
+ 	{ "mtk-seninf", { { "mtk-mdp", 3 } }, false },
+ 	{ "mxc-isi", {}, false },
+@@ -713,6 +727,51 @@
+ 
+ 	V4L2VideoDevice::Formats videoFormats = video_->formats(format.code);
+ 
++	if (videoFormats.empty()) {
++		/*
++		 * Pass-through CSI-2 receivers - ipu3-cio2 among them - take
++		 * their format and size from the connected subdevice, and
++		 * implement neither media-bus-code filtering (no
++		 * V4L2_CAP_IO_MC) nor VIDIOC_ENUM_FRAMESIZES, so the query
++		 * above yields nothing at all.
++		 *
++		 * For such a device the capture format is not a choice: it is
++		 * the sensor's Bayer order and depth in the receiver's own
++		 * packing, at the sensor's size. Derive that single valid
++		 * combination directly instead of enumerating.
++		 */
++		const BayerFormat &sensorBayer =
++			BayerFormat::fromMbusCode(format.code);
++
++		if (sensorBayer.isValid()) {
++			static constexpr BayerFormat::Packing kPackings[] = {
++				BayerFormat::Packing::IPU3,
++				BayerFormat::Packing::CSI2,
++				BayerFormat::Packing::None,
++			};
++
++			for (BayerFormat::Packing packing : kPackings) {
++				const BayerFormat bayer(sensorBayer.order,
++							sensorBayer.bitDepth,
++							packing);
++				const V4L2PixelFormat v4l2Format =
++					bayer.toV4L2PixelFormat();
++
++				if (!v4l2Format.isValid())
++					continue;
++
++				videoFormats.emplace(
++					v4l2Format,
++					std::vector<SizeRange>{ SizeRange(format.size) });
++
++				LOG(SimplePipeline, Debug)
++					<< "Device cannot enumerate formats; assuming "
++					<< v4l2Format.toString() << " at " << format.size;
++				break;
++			}
++		}
++	}
++
+ 	LOG(SimplePipeline, Debug)
+ 		<< "Adding configuration for " << format.size
+ 		<< " in pixel formats [ "
+--- a/src/libcamera/pipeline/meson.build	2026-01-29 07:17:26.000000000 -0500
++++ b/src/libcamera/pipeline/meson.build	2026-08-21 19:52:14.017075471 -0400
+@@ -12,6 +12,10 @@
+         continue
+     endif
+ 
++    # Expose which pipeline handlers this build contains, so that a generic
++    # handler can defer to a device-specific one that is also present.
++    config_h.set('HAVE_PIPELINE_' + pipeline.to_upper().underscorify(), 1)
++
+     subdirs += pipeline
+     subdir(pipeline)
+ 
+--- a/src/libcamera/v4l2_pixelformat.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/libcamera/v4l2_pixelformat.cpp	2026-08-19 14:48:32.211792823 -0400
+@@ -169,6 +169,19 @@
+ 		{ formats::SGRBG10_CSI2P, "10-bit Bayer GRGR/BGBG Packed" } },
+ 	{ V4L2PixelFormat(V4L2_PIX_FMT_SRGGB10P),
+ 		{ formats::SRGGB10_CSI2P, "10-bit Bayer RGRG/GBGB Packed" } },
++	/*
++	 * IPU3 packing (25 pixels per 32 bytes). BayerFormat already maps
++	 * these, but without the reverse mapping here a capture device
++	 * reporting an IPU3 fourcc cannot be resolved to a PixelFormat.
++	 */
++	{ V4L2PixelFormat(V4L2_PIX_FMT_IPU3_SBGGR10),
++		{ formats::SBGGR10_IPU3, "10-bit Bayer BGBG/GRGR IPU3 Packed" } },
++	{ V4L2PixelFormat(V4L2_PIX_FMT_IPU3_SGBRG10),
++		{ formats::SGBRG10_IPU3, "10-bit Bayer GBGB/RGRG IPU3 Packed" } },
++	{ V4L2PixelFormat(V4L2_PIX_FMT_IPU3_SGRBG10),
++		{ formats::SGRBG10_IPU3, "10-bit Bayer GRGR/BGBG IPU3 Packed" } },
++	{ V4L2PixelFormat(V4L2_PIX_FMT_IPU3_SRGGB10),
++		{ formats::SRGGB10_IPU3, "10-bit Bayer RGRG/GBGB IPU3 Packed" } },
+ 	{ V4L2PixelFormat(V4L2_PIX_FMT_SBGGR12),
+ 		{ formats::SBGGR12, "12-bit Bayer BGBG/GRGR" } },
+ 	{ V4L2PixelFormat(V4L2_PIX_FMT_SGBRG12),
+--- a/src/libcamera/sensor/camera_sensor_legacy.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/libcamera/sensor/camera_sensor_legacy.cpp	2026-08-19 16:46:43.581810689 -0400
+@@ -12,6 +12,7 @@
+ #include <limits.h>
+ #include <map>
+ #include <memory>
++#include <optional>
+ #include <string.h>
+ #include <string>
+ #include <vector>
+@@ -52,6 +53,42 @@
+ 
+ LOG_DECLARE_CATEGORY(CameraSensor)
+ 
++/*
++ * Look up a per-sensor override in an environment variable holding a
++ * comma-separated list of "model:value" pairs, for example
++ *
++ *   LIBCAMERA_SENSOR_ROTATION="imx319:180,imx355:180"
++ *
++ * Returns the value for \a model, or std::nullopt when the variable is unset
++ * or contains no entry for that sensor.
++ */
++static std::optional<std::string> sensorOverride(const char *envName,
++						 const std::string &model)
++{
++	const char *env = utils::secure_getenv(envName);
++	if (!env)
++		return std::nullopt;
++
++	auto trim = [](std::string s) {
++		const char *ws = " \t";
++		const std::size_t b = s.find_first_not_of(ws);
++		if (b == std::string::npos)
++			return std::string();
++		return s.substr(b, s.find_last_not_of(ws) - b + 1);
++	};
++
++	for (const auto &entry : utils::split(env, ",")) {
++		const std::size_t sep = entry.find(':');
++		if (sep == std::string::npos)
++			continue;
++
++		if (trim(entry.substr(0, sep)) == model)
++			return trim(entry.substr(sep + 1));
++	}
++
++	return std::nullopt;
++}
++
+ class CameraSensorLegacy : public CameraSensor, protected Loggable
+ {
+ public:
+@@ -592,12 +629,74 @@
+ 		}
+ 		properties_.set(properties::Location, propertyValue);
+ 	} else {
+-		LOG(CameraSensor, Warning) << "Failed to retrieve the camera location";
++		/*
++		 * V4L2_CID_CAMERA_ORIENTATION is absent on platforms where the
++		 * front/back placement lives in firmware tables the driver does
++		 * not parse. Leaving Location unset means applications cannot
++		 * tell a selfie camera from a rear one, and may mirror both (or
++		 * neither). Allow it to be supplied per sensor model:
++		 *
++		 *   LIBCAMERA_SENSOR_LOCATION="imx319:front,imx355:back"
++		 */
++		const std::optional<std::string> location =
++			sensorOverride("LIBCAMERA_SENSOR_LOCATION", model_);
++
++		if (location) {
++			static const std::map<std::string, int32_t> locations{
++				{ "front", properties::CameraLocationFront },
++				{ "back", properties::CameraLocationBack },
++				{ "external", properties::CameraLocationExternal },
++			};
++
++			const auto it = locations.find(*location);
++			if (it != locations.end()) {
++				properties_.set(properties::Location, it->second);
++				LOG(CameraSensor, Info)
++					<< "Using location override '" << *location
++					<< "' for " << model_;
++			} else {
++				LOG(CameraSensor, Warning)
++					<< "Invalid location override '" << *location
++					<< "' for " << model_;
++			}
++		} else {
++			LOG(CameraSensor, Warning)
++				<< "Failed to retrieve the camera location";
++		}
++	}
++
++	/*
++	 * Some platforms - ACPI/IPU3 machines in particular - keep the sensor
++	 * mounting rotation in firmware tables that the kernel driver does not
++	 * parse, so V4L2_CID_CAMERA_SENSOR_ROTATION is absent and libcamera
++	 * assumes 0 degrees, delivering upside-down images. Allow the value to
++	 * be supplied out of band, per sensor model:
++	 *
++	 *   LIBCAMERA_SENSOR_ROTATION="imx319:180,imx355:180"
++	 */
++	std::optional<int32_t> rotationOverride;
++	const std::optional<std::string> rotationValue =
++		sensorOverride("LIBCAMERA_SENSOR_ROTATION", model_);
++	if (rotationValue) {
++		try {
++			rotationOverride = std::stoi(*rotationValue);
++		} catch (...) {
++			LOG(CameraSensor, Warning)
++				<< "Invalid rotation override '" << *rotationValue
++				<< "' for " << model_;
++		}
+ 	}
+ 
+ 	const auto &rotationControl = controls.find(V4L2_CID_CAMERA_SENSOR_ROTATION);
+-	if (rotationControl != controls.end()) {
+-		int32_t propertyValue = rotationControl->second.def().get<int32_t>();
++	if (rotationOverride || rotationControl != controls.end()) {
++		int32_t propertyValue = rotationOverride
++						? *rotationOverride
++						: rotationControl->second.def().get<int32_t>();
++
++		if (rotationOverride)
++			LOG(CameraSensor, Info)
++				<< "Using rotation override of " << propertyValue
++				<< " degrees for " << model_;
+ 
+ 		/*
+ 		 * Cache the Transform associated with the camera mounting
+@@ -1004,6 +1103,19 @@
+ 		return 0;
+ 
+ 	if (testPatternModes_.empty()) {
++		/*
++		 * No test pattern mapping is known for this sensor (missing
++		 * camera_sensor_properties entry). Pipeline handlers
++		 * unconditionally request TestPatternModeOff at start() to
++		 * make sure test patterns are disabled "if any" - treat that
++		 * as a no-op instead of a hard failure, matching
++		 * applyTestPatternMode()'s own handling of the empty case.
++		 * Only a request for an actual non-Off pattern is an error
++		 * here, since we have no way to honour it.
++		 */
++		if (mode == controls::draft::TestPatternModeEnum::TestPatternModeOff)
++			return 0;
++
+ 		LOG(CameraSensor, Error)
+ 			<< "Camera sensor does not support test pattern modes.";
+ 		return -EINVAL;
+--- a/src/ipa/ipu3/ipa_context.h	2026-01-29 07:17:26.000000000 -0500
++++ b/src/ipa/ipu3/ipa_context.h	2026-08-21 20:45:34.905976401 -0400
+@@ -30,6 +30,14 @@
+ 
+ 	struct {
+ 		ipu3_uapi_grid_config afGrid;
++		/*
++		 * Focus travel of the attached VCM, read from the lens
++		 * controls rather than assumed. Sweep step is scaled to match,
++		 * so the search takes a comparable number of iterations
++		 * whatever the range.
++		 */
++		uint32_t maxFocusSteps;
++		uint32_t coarseSearchStep;
+ 	} af;
+ 
+ 	struct {
+@@ -41,6 +49,10 @@
+ 
+ 	struct {
+ 		int32_t defVBlank;
++		int32_t minVBlank;
++		int32_t maxVBlank;
++		/* Maximum exposure, in lines, achievable at defVBlank. */
++		int32_t maxExposureLines;
+ 		utils::Duration lineDuration;
+ 		Size size;
+ 	} sensor;
+--- a/src/ipa/ipu3/ipu3.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/ipa/ipu3/ipu3.cpp	2026-08-21 19:35:25.243791511 -0400
+@@ -205,6 +205,8 @@
+ {
+ 	const ControlInfo vBlank = sensorControls.find(V4L2_CID_VBLANK)->second;
+ 	context_.configuration.sensor.defVBlank = vBlank.def().get<int32_t>();
++	context_.configuration.sensor.minVBlank = vBlank.min().get<int32_t>();
++	context_.configuration.sensor.maxVBlank = vBlank.max().get<int32_t>();
+ 
+ 	const ControlInfo &v4l2Exposure = sensorControls.find(V4L2_CID_EXPOSURE)->second;
+ 	int32_t minExposure = v4l2Exposure.min().get<int32_t>();
+@@ -219,12 +221,34 @@
+ 	 * to know the limits for exposure time and analogue gain.
+ 	 * As it depends on the sensor, update it with the controls.
+ 	 *
+-	 * \todo take VBLANK into account for maximum exposure time
++	 * The exposure range a sensor reports is the range valid for its
++	 * *current* vertical blanking. Extending VBLANK lengthens the frame and
++	 * raises the exposure ceiling one line per line of blanking added, so
++	 * the achievable maximum is the reported maximum plus the blanking still
++	 * available. Reporting only the former makes the AGC saturate at the
++	 * shortest-frame exposure and compensate with digital gain, which on a
++	 * dark scene yields a dim, noisy image while the sensor still has
++	 * headroom.
++	 *
++	 * setControls() extends VBLANK to match whatever exposure the AGC then
++	 * asks for, so frame rate is traded for light only when it is needed.
+ 	 */
++	context_.configuration.sensor.maxExposureLines = maxExposure;
++
++	int32_t extraVBlank = std::max(0, context_.configuration.sensor.maxVBlank -
++					  context_.configuration.sensor.defVBlank);
++	int32_t maxExposureExtended = maxExposure + extraVBlank;
++
+ 	context_.configuration.agc.minExposureTime = minExposure * context_.configuration.sensor.lineDuration;
+-	context_.configuration.agc.maxExposureTime = maxExposure * context_.configuration.sensor.lineDuration;
++	context_.configuration.agc.maxExposureTime = maxExposureExtended * context_.configuration.sensor.lineDuration;
+ 	context_.configuration.agc.minAnalogueGain = camHelper_->gain(minGain);
+ 	context_.configuration.agc.maxAnalogueGain = camHelper_->gain(maxGain);
++
++	LOG(IPAIPU3, Debug)
++		<< "Exposure ceiling " << maxExposure << " lines at VBLANK "
++		<< context_.configuration.sensor.defVBlank << ", extended to "
++		<< maxExposureExtended << " lines using VBLANK up to "
++		<< context_.configuration.sensor.maxVBlank;
+ }
+ 
+ /**
+@@ -645,7 +669,24 @@
+ 	int32_t exposure = context_.activeState.agc.exposure;
+ 	int32_t gain = camHelper_->gainCode(context_.activeState.agc.gain);
+ 
++	/*
++	 * An exposure longer than the frame is not achievable, so extend
++	 * vertical blanking by however many lines the request overshoots the
++	 * ceiling the sensor reports at its default blanking. Short exposures
++	 * leave VBLANK at its default, so frame rate is only sacrificed for
++	 * light when the scene actually requires it.
++	 *
++	 * VBLANK must be applied before EXPOSURE: the sensor derives the valid
++	 * exposure range from the frame length, and a longer exposure submitted
++	 * against the old, shorter frame would simply be clamped away.
++	 */
++	const auto &sensorCfg = context_.configuration.sensor;
++	int32_t vBlank = std::clamp(sensorCfg.defVBlank +
++					    std::max(0, exposure - sensorCfg.maxExposureLines),
++				    sensorCfg.minVBlank, sensorCfg.maxVBlank);
++
+ 	ControlList ctrls(sensorCtrls_);
++	ctrls.set(V4L2_CID_VBLANK, vBlank);
+ 	ctrls.set(V4L2_CID_EXPOSURE, exposure);
+ 	ctrls.set(V4L2_CID_ANALOGUE_GAIN, gain);
+ 
+--- a/src/ipa/ipu3/algorithms/af.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/ipa/ipu3/algorithms/af.cpp	2026-08-21 20:46:31.597990674 -0400
+@@ -162,8 +162,42 @@
+ 	grid.y_start = utils::alignDown(start.y, 2);
+ 	grid.y_start |= IPU3_UAPI_GRID_Y_START_EN;
+ 
++	/*
++	 * Determine the VCM's actual focus travel from the lens controls
++	 * instead of assuming kMaxFocusSteps. Closes the
++	 * "\todo should be obtained from the VCM driver" above: a VCM with a
++	 * larger range than the assumed default would otherwise only ever be
++	 * driven over the near part of its travel, and could never reach focus
++	 * on subjects whose sharp position lies beyond it.
++	 *
++	 * Scale the coarse sweep step by the same factor, so the search still
++	 * completes in a comparable number of iterations rather than taking
++	 * proportionally longer on a longer-throw lens.
++	 */
++	context.configuration.af.maxFocusSteps = kMaxFocusSteps;
++	context.configuration.af.coarseSearchStep = kCoarseSearchStep;
++
++	const auto &focusCtrl = configInfo.lensControls.find(V4L2_CID_FOCUS_ABSOLUTE);
++	if (focusCtrl != configInfo.lensControls.end()) {
++		const int32_t lensMax = focusCtrl->second.max().get<int32_t>();
++
++		if (lensMax > 0) {
++			context.configuration.af.maxFocusSteps =
++				static_cast<uint32_t>(lensMax);
++			context.configuration.af.coarseSearchStep =
++				std::max(1U, static_cast<uint32_t>(
++						     kCoarseSearchStep * lensMax /
++						     static_cast<int32_t>(kMaxFocusSteps)));
++
++			LOG(IPU3Af, Info)
++				<< "VCM focus range 0-" << lensMax
++				<< ", coarse step "
++				<< context.configuration.af.coarseSearchStep;
++		}
++	}
++
+ 	/* Initial max focus step */
+-	maxStep_ = kMaxFocusSteps;
++	maxStep_ = context.configuration.af.maxFocusSteps;
+ 
+ 	/* Initial frame ignore counter */
+ 	afIgnoreFrameReset();
+@@ -209,7 +243,7 @@
+ 	if (afNeedIgnoreFrame())
+ 		return;
+ 
+-	if (afScan(context, kCoarseSearchStep)) {
++	if (afScan(context, context.configuration.af.coarseSearchStep)) {
+ 		coarseCompleted_ = true;
+ 		context.activeState.af.maxVariance = 0;
+ 		focus_ = context.activeState.af.focus -
+@@ -217,7 +251,7 @@
+ 		context.activeState.af.focus = focus_;
+ 		previousVariance_ = 0;
+ 		maxStep_ = std::clamp(focus_ + static_cast<uint32_t>((focus_ * kFineRange)),
+-				      0U, kMaxFocusSteps);
++				      0U, context.configuration.af.maxFocusSteps);
+ 	}
+ }
+ 
+@@ -260,7 +294,7 @@
+ 	previousVariance_ = 0.0;
+ 	coarseCompleted_ = false;
+ 	fineCompleted_ = false;
+-	maxStep_ = kMaxFocusSteps;
++	maxStep_ = context.configuration.af.maxFocusSteps;
+ }
+ 
+ /**
+--- a/src/ipa/ipu3/algorithms/tone_mapping.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/ipa/ipu3/algorithms/tone_mapping.cpp	2026-08-21 22:06:26.471410132 -0400
+@@ -8,6 +8,7 @@
+ #include "tone_mapping.h"
+ 
+ #include <cmath>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ /**
+@@ -90,11 +91,25 @@
+ 			  [[maybe_unused]] ControlList &metadata)
+ {
+ 	/*
+-	 * Hardcode gamma to 1.1 as a default for now.
++	 * Gamma applied by the ImgU's tone-mapping LUT.
+ 	 *
+-	 * \todo Expose gamma control setting through the libcamera control API
++	 * 1.0 makes the LUT an identity curve, i.e. no gamma correction at
++	 * this stage. Higher values open the midtones, but with no contrast or
++	 * tone curve after this stage they lift the black point too: measured
++	 * on this hardware, 2.2 left 0% of pixels in the bottom quarter of the
++	 * range, which reads as washed out. Chosen by eye on this display.
++	 *
++	 * \todo Expose gamma through the libcamera control API. Until then
++	 * LIBCAMERA_IPU3_GAMMA overrides this at runtime.
+ 	 */
+-	gamma_ = 1.1;
++	gamma_ = 1.0;
++
++	const char *gammaEnv = utils::secure_getenv("LIBCAMERA_IPU3_GAMMA");
++	if (gammaEnv) {
++		double value = atof(gammaEnv);
++		if (value >= 1.0 && value <= 4.0)
++			gamma_ = value;
++	}
+ 
+ 	if (context.activeState.toneMapping.gamma == gamma_)
+ 		return;
+--- a/src/ipa/ipu3/algorithms/awb.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/ipa/ipu3/algorithms/awb.cpp	2026-08-21 22:36:55.247583614 -0400
+@@ -8,8 +8,10 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <stdlib.h>
+ 
+ #include <libcamera/base/log.h>
++#include <libcamera/base/utils.h>
+ 
+ #include <libcamera/control_ids.h>
+ 
+@@ -119,6 +121,46 @@
+ 	0, 0, 8191, 0
+ };
+ 
++/*
++ * Build a colour correction matrix that applies a saturation factor.
++ *
++ * The identity matrix above leaves the sensor's raw channel crosstalk
++ * uncorrected, which collapses colours towards grey: measured on an IPU3
++ * device, mean chroma was 2.6 against a typical 15-25, with nothing in the
++ * frame exceeding 14.
++ *
++ * A properly calibrated CCM requires measuring the sensor against a colour
++ * chart and cannot be derived here. A saturation matrix is instead well
++ * defined without calibration: it interpolates between the luminance of a
++ * pixel and the pixel itself, so a factor of 1.0 reproduces the identity
++ * matrix exactly and larger factors scale chroma about the luma axis without
++ * shifting hue or altering brightness.
++ *
++ * This is a saturation control, not a colour calibration - it does not correct
++ * hue errors. It is a substantial improvement on identity, and a real
++ * per-sensor CCM should replace it if one is ever measured.
++ */
++static struct ipu3_uapi_ccm_mat_config ccmFromSaturation(double saturation)
++{
++	/* Rec.601 luma coefficients, matching the ImgU's YUV conversion. */
++	static constexpr double kLumaR = 0.299;
++	static constexpr double kLumaG = 0.587;
++	static constexpr double kLumaB = 0.114;
++	static constexpr double kOne = 8191.0;
++
++	auto coeff = [saturation](double luma, bool diagonal) {
++		double v = luma * (1.0 - saturation) + (diagonal ? saturation : 0.0);
++		return static_cast<int16_t>(std::lround(std::clamp(v * kOne,
++								   -32768.0, 32767.0)));
++	};
++
++	return {
++		coeff(kLumaR, true),  coeff(kLumaG, false), coeff(kLumaB, false), 0,
++		coeff(kLumaR, false), coeff(kLumaG, true),  coeff(kLumaB, false), 0,
++		coeff(kLumaR, false), coeff(kLumaG, false), coeff(kLumaB, true),  0
++	};
++}
++
+ /**
+  * \class Awb
+  * \brief A Grey world white balance correction algorithm
+@@ -295,8 +337,19 @@
+ 
+ 	LOG(IPU3Awb, Debug) << "Color temperature estimated: " << asyncResults_.temperatureK;
+ 
+-	/* The CCM matrix may change when color temperature will be used */
+-	params->acc_param.ccm = imguCssCcmDefault;
++	/*
++	 * \todo The CCM should come from a per-sensor calibration, and vary
++	 * with the estimated colour temperature. Until then apply a saturation
++	 * matrix, overridable at runtime with LIBCAMERA_IPU3_SATURATION.
++	 */
++	static const double saturation = []() {
++		const char *env = utils::secure_getenv("LIBCAMERA_IPU3_SATURATION");
++		double value = env ? atof(env) : 1.0;
++		return (value >= 0.0 && value <= 4.0) ? value : 1.0;
++	}();
++
++	params->acc_param.ccm = saturation == 1.0 ? imguCssCcmDefault
++						  : ccmFromSaturation(saturation);
+ 
+ 	params->use.acc_awb = 1;
+ 	params->use.acc_bnr = 1;
+--- a/src/libcamera/pipeline/ipu3/ipu3.cpp	2026-01-29 07:17:26.000000000 -0500
++++ b/src/libcamera/pipeline/ipu3/ipu3.cpp	2026-08-21 22:20:33.834815422 -0400
+@@ -453,7 +453,27 @@
+ 							      ImgUDevice::kOutputAlignHeight);
+ 			pixelFormat = formats::NV12;
+ 			bufferCount = IPU3CameraConfiguration::kBufferCount;
+-			streamFormats[pixelFormat] = { { ImgUDevice::kOutputMinSize, size } };
++
++			/*
++			 * Advertise everything the ImgU can produce, not just
++			 * the default size chosen above.
++			 *
++			 * kViewfinderSize is a sensible *default*, but using it
++			 * as the upper bound of the advertised range means an
++			 * application can never negotiate anything larger - and
++			 * a request below the sensor's binned mode also drives
++			 * the sensor into that binned mode, so the whole
++			 * pipeline runs at a quarter of the available
++			 * resolution with no way to opt out. StillCapture
++			 * already advertises the full range this way.
++			 */
++			Size maxSize = sensorResolution
++					       .boundedTo(ImgUDevice::kOutputMaxSize)
++					       .shrunkBy({ 1, 1 })
++					       .alignedDownTo(ImgUDevice::kOutputMarginWidth,
++							      ImgUDevice::kOutputMarginHeight);
++			streamFormats[pixelFormat] = { { ImgUDevice::kOutputMinSize,
++							 maxSize.expandedTo(size) } };
+ 
+ 			break;
+ 		}
+@@ -1086,6 +1106,15 @@
+ 		std::unordered_map<uint32_t, DelayedControls::ControlParams> params = {
+ 			{ V4L2_CID_ANALOGUE_GAIN, { delays.gainDelay, false } },
+ 			{ V4L2_CID_EXPOSURE, { delays.exposureDelay, false } },
++			/*
++			 * The IPA extends vertical blanking to lengthen the
++			 * frame when the AGC asks for an exposure longer than
++			 * the current frame allows. It is a priority write: the
++			 * sensor clamps exposure to the frame length, so a
++			 * longer frame has to be programmed before the longer
++			 * exposure that depends on it.
++			 */
++			{ V4L2_CID_VBLANK, { delays.vblankDelay, true } },
+ 		};
+ 
+ 		data->delayedCtrls_ =
