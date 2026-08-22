@@ -1,45 +1,78 @@
 #!/bin/bash
 # dkms-support.sh — can this machine build out-of-tree kernel modules?
 #
-#   dkms-support.sh          exit 0 = yes, 1 = no
-#   dkms-support.sh --why    explain, and say what is missing
+#   dkms-support.sh                  exit 0 if ANY installed kernel is buildable
+#   dkms-support.sh --kernel <ver>   check one specific kernel
+#   dkms-support.sh --list           print every buildable kernel version
+#   dkms-support.sh --why            explain, and say what is missing
 #
-# Building a patched copy of a single driver is far cheaper than rebuilding a
-# kernel, and DKMS re-does it automatically on kernel updates. It needs three
-# things: headers for the RUNNING kernel, dkms itself, and the ability to load
-# an unsigned module.
+# Deliberately not limited to the running kernel. A custom kernel often ships
+# without headers while the distro kernel alongside it has them, and DKMS can
+# build for any installed kernel with -k. Reporting "impossible" because the
+# kernel you happen to have booted lacks headers would be wrong and unhelpful.
 
 set -uo pipefail
-EXPLAIN=${1:-}
-K=$(uname -r)
-MISSING=()
 
-BUILD="/lib/modules/$K/build"
-[ -e "$BUILD" ] || MISSING+=("kernel headers for $K (no $BUILD)")
+buildable() {
+    local k="$1" b="/lib/modules/$1/build"
+    [ -e "$b" ] || return 1
+    # CONFIG_MODVERSIONS kernels need Module.symvers, or symbol CRCs will not
+    # match and the module is refused at load.
+    if grep -q "^CONFIG_MODVERSIONS=y" "/boot/config-$k" 2>/dev/null; then
+        [ -e "$b/Module.symvers" ] || return 1
+    fi
+    return 0
+}
 
-# CONFIG_MODVERSIONS kernels need Module.symvers or symbol CRCs will not match.
-if [ -e "$BUILD" ] && grep -q modversions <<<"$(modinfo ipu3_imgu 2>/dev/null || true)"; then
-    [ -e "$BUILD/Module.symvers" ] || MISSING+=("Module.symvers (kernel uses CONFIG_MODVERSIONS)")
-fi
+list_buildable() {
+    for k in $(ls /lib/modules/ 2>/dev/null); do
+        buildable "$k" && echo "$k"
+    done
+}
 
-command -v dkms >/dev/null 2>&1 || MISSING+=("dkms (apt install dkms)")
+MODE=${1:-}
+case "$MODE" in
+--kernel)
+    K="${2:?usage: $0 --kernel <version>}"
+    buildable "$K"; exit $?
+    ;;
+--list)
+    list_buildable
+    [ -n "$(list_buildable)" ] || exit 1
+    exit 0
+    ;;
+esac
 
-if [ "$(cat /sys/module/module/parameters/sig_enforce 2>/dev/null || echo N)" = Y ]; then
-    MISSING+=("module signature enforcement is ON; a self-built module will not load")
-fi
+mapfile -t OK < <(list_buildable)
+HAVE_DKMS=no; command -v dkms >/dev/null 2>&1 && HAVE_DKMS=yes
+SIG=$(cat /sys/module/module/parameters/sig_enforce 2>/dev/null || echo N)
 
-if [ ${#MISSING[@]} -eq 0 ]; then
-    [ "$EXPLAIN" = --why ] && echo "Out-of-tree module builds are possible on this machine."
+if [ ${#OK[@]} -gt 0 ] && [ "$HAVE_DKMS" = yes ] && [ "$SIG" != Y ]; then
+    [ "$MODE" = --why ] && {
+        echo "Out-of-tree module builds are possible."
+        printf '  buildable kernel: %s\n' "${OK[@]}"
+    }
     exit 0
 fi
 
-if [ "$EXPLAIN" = --why ]; then
-    echo "This machine cannot build out-of-tree kernel modules yet."
+if [ "$MODE" = --why ]; then
+    RUNNING=$(uname -r)
+    echo "Out-of-tree module builds are not currently possible."
     echo
-    for m in "${MISSING[@]}"; do echo "  missing: $m"; done
-    echo
-    echo "Headers are the usual blocker on a custom kernel. Whoever builds it"
-    echo "should ship the matching linux-headers package - 'make bindeb-pkg'"
-    echo "produces one alongside the image. See KERNEL_HEADERS_REQUEST.md."
+    if [ ${#OK[@]} -eq 0 ]; then
+        echo "  missing: kernel headers - no installed kernel has a usable build/ tree"
+        echo "           (a custom kernel usually needs its linux-headers package"
+        echo "            shipping alongside; 'make bindeb-pkg' produces one)"
+    else
+        printf '  buildable kernel: %s\n' "${OK[@]}"
+        if ! buildable "$RUNNING"; then
+            echo
+            echo "  note: the RUNNING kernel ($RUNNING) has no headers, so a module"
+            echo "        built now would be for a different kernel and would not"
+            echo "        load until you boot into it."
+        fi
+    fi
+    [ "$HAVE_DKMS" = no ] && echo "  missing: dkms (sudo apt install dkms)"
+    [ "$SIG" = Y ] && echo "  missing: module signature enforcement is ON; an unsigned build will not load"
 fi
 exit 1
