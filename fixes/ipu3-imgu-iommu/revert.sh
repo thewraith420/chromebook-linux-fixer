@@ -1,3 +1,3 @@
 #!/bin/bash
-echo "Kernel-side fix; revert by removing the quirk patch or the iommu=pt token."
-exit 1
+set -euo pipefail
+"$FIXER_REPO/lib/kernel-cmdline.sh" remove iommu=pt

@@ -1,16 +1,7 @@
 id: ipu3-imgu-iommu
-name: IPU3 ImgU IOMMU passthrough (KERNEL - prevents hard lockup)
+name: IPU3 ImgU IOMMU passthrough (prevents hard lockup)
 risk: high
-reverts_cleanly: false
-danger: |
-  THIS CONCERNS A FAULT THAT HARD LOCKS THE MACHINE.
-  On the reference hardware, streaming the ImgU without an IOMMU passthrough
-  domain locked the machine solid three times: no panic, no oops, nothing in
-  the journal or pstore, and a forced power-off each time. One of those resets
-  left the boot filesystem dirty.
-  This entry only DETECTS the condition. It deliberately cannot apply the fix,
-  because the remedy is a kernel patch or a bootloader change and neither
-  belongs to an automated tool.
+reverts_cleanly: true
 applies_to:
   chromebook: true
 description: |
@@ -19,8 +10,22 @@ description: |
   IOMMU identity/passthrough domain. In the kernel's default translated domain,
   VT-d re-translates those addresses, finds no mapping, and the machine HARD
   LOCKS on the ImgU's first DMA - no panic, no oops, nothing in the journal.
+
+  Two remedies exist. The better one is a per-device passthrough quirk for PCI
+  8086:1919 in the kernel, which needs no boot parameter at all, but requires a
+  kernel rebuild (see kernel/README.md). The one this fix can apply is
+  iommu=pt on the kernel command line, which is preferred over intel_iommu=off
+  because it keeps the IOMMU enabled and protecting every other device.
+danger: |
+  THIS FIX ADDS A KERNEL COMMAND LINE PARAMETER AND REQUIRES A REBOOT.
+  A malformed kernel command line can stop the machine booting. Every
+  bootloader config is backed up first, and revert removes the parameter.
+  Keep a second kernel installed as an escape route before applying.
+
+  The fault this addresses is severe: on the reference hardware, streaming the
+  ImgU without a passthrough domain locked the machine solid three times - no
+  panic, no oops, nothing in the journal or pstore, a forced power-off each
+  time, and one of those left the boot filesystem dirty.
 notes: |
-  This fix is KERNEL SIDE and cannot be applied from userspace. It is either a
-  per-device passthrough quirk for 8086:1919 (preferred) or iommu=pt on the
-  kernel command line. Until one is present, do not run any libcamera build
-  containing the ipu3 pipeline handler: it will lock the machine.
+  If the kernel already carries the per-device quirk, this fix reports itself
+  as not needed and does nothing.

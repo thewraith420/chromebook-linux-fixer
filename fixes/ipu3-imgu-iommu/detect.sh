@@ -1,17 +1,19 @@
 #!/bin/bash
-# Needed when an IPU3 ImgU exists but is NOT in a passthrough domain.
+# exit 0 = needed, 1 = not needed / not applicable, 2 = cannot tell
 set -uo pipefail
 IMGU=/sys/bus/pci/devices/0000:00:05.0
-[ -d "$IMGU" ] || exit 1                       # no ImgU: not applicable
-grep -qi "8086.*1919" "$IMGU/uevent" 2>/dev/null || \
-  [ -e "$IMGU/driver/module/drivers/pci:ipu3-imgu" ] || exit 1
+[ -d "$IMGU" ] || exit 1                        # no IPU3 ImgU on this machine
 
-TYPE=$(cat "$IMGU/iommu_group/type" 2>/dev/null || echo "none")
+TYPE=$(cat "$IMGU/iommu_group/type" 2>/dev/null || echo none)
 case "$TYPE" in
     identity|none)
-        exit 1 ;;                              # already safe
-    *)
-        echo "ImgU is in a '$TYPE' IOMMU domain — streaming it will HARD LOCK this machine"
-        echo "Fix is kernel-side: per-device passthrough quirk for 8086:1919, or iommu=pt"
-        exit 0 ;;
+        exit 1 ;;                               # already safe
 esac
+
+echo "ImgU sits in a '$TYPE' IOMMU domain; streaming it will hard lock this machine."
+if "$FIXER_REPO/lib/kernel-cmdline.sh" active iommu=pt; then
+    echo "iommu=pt is already on the running cmdline but the domain is still '$TYPE'"
+    echo "- this needs the per-device kernel quirk instead (see kernel/)."
+    exit 2
+fi
+exit 0
