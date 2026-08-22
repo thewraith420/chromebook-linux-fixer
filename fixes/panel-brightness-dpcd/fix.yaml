@@ -1,0 +1,18 @@
+id: panel-brightness-dpcd
+name: Screen brightness control on i915 panels
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  On several Chromebook panels the brightness keys and slider stop working after
+  a kernel upgrade, because i915 picks a backlight control method the panel does
+  not implement. Forcing DPCD (eDP AUX) backlight control restores it.
+
+  Sets i915.enable_dpcd_backlight=2 on the kernel command line. Requires a
+  reboot.
+danger: |
+  Adds a kernel command line parameter and needs a reboot. Bootloader configs
+  are backed up first and revert removes the parameter. If the panel does not
+  support DPCD backlight this can leave brightness stuck rather than fixed -
+  revert and reboot if that happens.

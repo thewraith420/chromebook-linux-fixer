@@ -1,0 +1,24 @@
+id: display-autorotate
+name: Automatic screen rotation from the accelerometer
+risk: low
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  GNOME rotates the screen only when mutter believes the machine is in tablet
+  mode, which requires a tablet-mode switch that many convertibles either lack
+  or report in a way mutter rejects. Where that happens the display never
+  rotates and no user-facing setting fixes it.
+
+  Installs a small user service that reads the accelerometer from
+  iio-sensor-proxy and rotates the built-in display through mutter's
+  DisplayConfig interface. Both are ordinary D-Bus calls, so this needs no
+  GNOME Shell extension - and therefore does not break when the shell's
+  extension API changes.
+
+  Honours the existing orientation-lock setting, so the lock control in Quick
+  Settings keeps working, and releases the accelerometer while locked so the
+  sensor can power down.
+danger: |
+  If a GNOME extension on this machine already does auto-rotation, both will
+  drive the display independently. Disable one of them.

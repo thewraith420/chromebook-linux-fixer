@@ -1,0 +1,17 @@
+id: waydroid-usb
+name: USB device passthrough into Waydroid
+risk: low
+reverts_cleanly: true
+applies_to: {}
+description: |
+  Waydroid's container gets no access to USB devices, so hardware security keys,
+  USB serial adapters and similar do not work inside Android apps.
+
+  Binds the whole /dev/bus/usb tree into the container rather than individual
+  device nodes, because bus and device numbers change every time a device is
+  reconnected or the machine reboots - a node-specific entry works once and then
+  silently stops.
+danger: |
+  Gives Android apps access to every USB device on the machine. That is what
+  makes security keys work, and it is also broader access than the container
+  had before. Edits waydroid's own config; an upgrade may overwrite it.

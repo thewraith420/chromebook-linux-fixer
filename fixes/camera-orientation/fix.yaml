@@ -1,0 +1,29 @@
+id: camera-orientation
+name: Camera image rotation and front/back labelling
+risk: low
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+prefers:
+  - ipu3-camera
+description: |
+  Many Chromebook camera sensors are mounted rotated, and the drivers do not
+  expose V4L2_CID_CAMERA_SENSOR_ROTATION or V4L2_CID_CAMERA_ORIENTATION. The
+  data normally comes from the ChromeOS SSDB ACPI table, which third-party
+  firmware such as MrChromebox does not ship - so it is absent from the machine
+  entirely, not merely unread.
+
+  Without it libcamera assumes 0 degrees and never sets a camera Location, so
+  images arrive upside down and applications cannot tell which camera is the
+  selfie one (and mirror the wrong one).
+
+  Supplies both values through libcamera environment overrides. A kernel DMI
+  quirk is the better answer where one exists; this fix detects that case and
+  reports itself as unnecessary.
+danger: |
+  Values are per-sensor and must be determined by looking at the picture. The
+  defaults here are correct for Google Nocturne (Pixel Slate) and are a guess
+  anywhere else - check the image and adjust if it is wrong.
+notes: |
+  Needs a libcamera carrying the rotation/location override patch. The stock
+  distribution build ignores these variables.

@@ -1,0 +1,17 @@
+id: waydroid-lxc-hook
+name: Waydroid container restart after any stop
+risk: low
+reverts_cleanly: true
+applies_to: {}
+description: |
+  Waydroid's own LXC template sets "lxc.hook.post-stop = /dev/null". Modern LXC
+  tries to execute that path literally, fails with exit 126, and refuses to
+  start the container again. The symptom is that Waydroid works once, and then
+  never restarts after being stopped until the machine is rebooted.
+
+  Replaces the hook with /bin/true in both the shipped template and the live
+  per-session config, which is generated once and not refreshed from the
+  template.
+danger: |
+  Edits files owned by the waydroid package; an upgrade will overwrite them and
+  the fix will need re-applying. Originals are backed up alongside.
