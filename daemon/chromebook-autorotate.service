@@ -1,0 +1,17 @@
+[Unit]
+Description=Rotate the built-in display to match the accelerometer
+Documentation=https://github.com/chromebook-fixer
+# Needs a graphical session: it talks to mutter on the session bus.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/chromebook-fixer/daemon/chromebook-autorotate
+Restart=on-failure
+RestartSec=5
+# Exits 0 when there is no accelerometer; that is success, not a fault.
+SuccessExitStatus=0
+
+[Install]
+WantedBy=graphical-session.target

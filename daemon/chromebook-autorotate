@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""chromebook-autorotate — rotate the built-in display to match the accelerometer.
+
+GNOME's own auto-rotation depends on mutter deciding the machine is in "tablet
+mode", which requires a tablet-mode switch that many convertibles either lack or
+report in a way mutter does not accept. Where that happens the display simply
+never rotates, and there is no user-facing setting that fixes it.
+
+This does the job from outside the shell. Both halves are ordinary session
+D-Bus calls, so no GNOME Shell extension is required - which also means it does
+not break every time the shell's extension API changes:
+
+    accelerometer   net.hadess.SensorProxy        (iio-sensor-proxy, SYSTEM bus)
+    rotation        org.gnome.Mutter.DisplayConfig (mutter, SESSION bus)
+
+It honours the same orientation-lock setting the shell uses, so the existing
+lock control in Quick Settings keeps working.
+"""
+
+import signal
+import sys
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+try:
+    gi.require_version("GLibUnix", "2.0")
+    from gi.repository import GLibUnix
+    _signal_add = GLibUnix.signal_add
+except (ValueError, ImportError):        # older GLib
+    _signal_add = GLib.unix_signal_add
+
+SENSOR_NAME = "net.hadess.SensorProxy"
+SENSOR_PATH = "/net/hadess/SensorProxy"
+DISPLAY_NAME = "org.gnome.Mutter.DisplayConfig"
+DISPLAY_PATH = "/org/gnome/Mutter/DisplayConfig"
+
+LOCK_SCHEMA = "org.gnome.settings-daemon.peripherals.touchscreen"
+LOCK_KEY = "orientation-lock"
+
+# mutter transform values
+TRANSFORMS = {
+    "normal": 0,
+    "left-up": 1,
+    "bottom-up": 2,
+    "right-up": 3,
+}
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+class AutoRotate:
+    def __init__(self):
+        self.claimed = False
+        self.last_transform = None
+
+        # The two services live on different buses: iio-sensor-proxy is a
+        # system service, mutter is per-session.
+        self.system_bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.session_bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+        self.sensor = Gio.DBusProxy.new_sync(
+            self.system_bus, Gio.DBusProxyFlags.NONE, None,
+            SENSOR_NAME, SENSOR_PATH, SENSOR_NAME, None)
+
+        self.display = Gio.DBusProxy.new_sync(
+            self.session_bus, Gio.DBusProxyFlags.NONE, None,
+            DISPLAY_NAME, DISPLAY_PATH, DISPLAY_NAME, None)
+
+        if not self.sensor.get_cached_property("HasAccelerometer"):
+            log("no accelerometer reported by iio-sensor-proxy; nothing to do")
+            sys.exit(0)
+
+        self.settings = None
+        source = Gio.SettingsSchemaSource.get_default()
+        if source and source.lookup(LOCK_SCHEMA, True):
+            self.settings = Gio.Settings.new(LOCK_SCHEMA)
+            self.settings.connect(f"changed::{LOCK_KEY}",
+                                  lambda *_: self.update_claim())
+
+        self.sensor.connect("g-properties-changed", self.on_sensor_changed)
+        self.update_claim()
+
+    # -- accelerometer claim ---------------------------------------------
+
+    @property
+    def locked(self):
+        return bool(self.settings and self.settings.get_boolean(LOCK_KEY))
+
+    def update_claim(self):
+        """
+        iio-sensor-proxy only emits orientation changes to clients that have
+        claimed the accelerometer, and only powers the sensor while at least
+        one client holds a claim. Release it while locked so the sensor can
+        idle rather than spinning for readings nobody will act on.
+        """
+        want = not self.locked
+        if want == self.claimed:
+            return
+        try:
+            self.sensor.call_sync(
+                "ClaimAccelerometer" if want else "ReleaseAccelerometer",
+                None, Gio.DBusCallFlags.NONE, -1, None)
+        except GLib.Error as err:
+            log(f"could not {'claim' if want else 'release'} accelerometer: {err.message}")
+            return
+        self.claimed = want
+        log(f"accelerometer {'claimed' if want else 'released'}"
+            f"{' (orientation locked)' if not want else ''}")
+        if want:
+            self.apply_current()
+
+    # -- rotation --------------------------------------------------------
+
+    def on_sensor_changed(self, _proxy, changed, _invalidated):
+        if "AccelerometerOrientation" in changed.unpack():
+            self.apply_current()
+
+    def apply_current(self):
+        if self.locked:
+            return
+        prop = self.sensor.get_cached_property("AccelerometerOrientation")
+        if prop is None:
+            return
+        transform = TRANSFORMS.get(prop.get_string())
+        if transform is None or transform == self.last_transform:
+            return
+        if self.set_transform(transform):
+            self.last_transform = transform
+
+    def set_transform(self, transform):
+        """Re-apply the current monitor layout with a new transform."""
+        try:
+            state = self.display.call_sync(
+                "GetCurrentState", None, Gio.DBusCallFlags.NONE, -1, None)
+        except GLib.Error as err:
+            log(f"GetCurrentState failed: {err.message}")
+            return False
+
+        serial, monitors, logical, _props = state.unpack()
+
+        # Find the built-in panel and the mode it is currently using. Only the
+        # built-in display should follow the accelerometer; an external monitor
+        # is not attached to the machine being tilted.
+        builtin = None
+        for connector_info, modes, mon_props in monitors:
+            if mon_props.get("is-builtin"):
+                current = next((m[0] for m in modes if m[6].get("is-current")), None)
+                if current:
+                    builtin = (connector_info[0], current)
+                break
+        if not builtin:
+            log("no built-in monitor with a current mode; not rotating")
+            return False
+
+        connector, mode_id = builtin
+
+        updated = []
+        for x, y, scale, _old_transform, primary, assigned, _lprops in logical:
+            if any(a[0] == connector for a in assigned):
+                updated.append((x, y, scale, transform, primary,
+                                [(connector, mode_id, {})]))
+            else:
+                updated.append((x, y, scale, _old_transform, primary,
+                                [(a[0], mode_id, {}) for a in assigned]))
+
+        try:
+            # method 1 = "temporary": applied now, not written to the monitor
+            # configuration file. Rotation follows the device continuously, so
+            # persisting every change would churn the user's config.
+            self.display.call_sync(
+                "ApplyMonitorsConfig",
+                GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})",
+                             (serial, 1, updated, {})),
+                Gio.DBusCallFlags.NONE, -1, None)
+        except GLib.Error as err:
+            log(f"ApplyMonitorsConfig failed: {err.message}")
+            return False
+
+        log(f"rotated to transform {transform}")
+        return True
+
+
+def main():
+    try:
+        rotator = AutoRotate()
+    except GLib.Error as err:
+        log(f"startup failed: {err.message}")
+        return 1
+
+    loop = GLib.MainLoop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        _signal_add(GLib.PRIORITY_DEFAULT, sig,
+                    lambda: (loop.quit(), False)[1])
+    log("watching accelerometer")
+    try:
+        loop.run()
+    finally:
+        if rotator.claimed:
+            try:
+                rotator.sensor.call_sync("ReleaseAccelerometer", None,
+                                         Gio.DBusCallFlags.NONE, -1, None)
+            except GLib.Error:
+                pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
