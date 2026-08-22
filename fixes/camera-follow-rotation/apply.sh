@@ -1,6 +1,31 @@
 #!/bin/bash
 set -euo pipefail
 
+# v4l2loopback is an out-of-tree module, so it must be buildable for the kernel
+# that is actually running - not merely for some installed kernel. DKMS will
+# happily build for every kernel it has headers for and silently skip the one
+# in use, which then fails at modprobe with a confusing "module not found".
+RUNNING=$(uname -r)
+if ! "$FIXER_REPO/lib/dkms-support.sh" --kernel "$RUNNING" 2>/dev/null; then
+    echo "Cannot build v4l2loopback for the running kernel ($RUNNING):"
+    echo "  no headers at /lib/modules/$RUNNING/build"
+    echo
+    mapfile -t OK < <("$FIXER_REPO/lib/dkms-support.sh" --list 2>/dev/null)
+    if [ ${#OK[@]} -gt 0 ]; then
+        echo "These installed kernels do have headers, and the module can build there:"
+        printf '    %s\n' "${OK[@]}"
+        echo
+        echo "Options:"
+        echo "  - boot one of those kernels, or"
+        echo "  - install the linux-headers package matching $RUNNING."
+        echo "    For a self-built kernel, 'make bindeb-pkg' produces one"
+        echo "    alongside the image. See KERNEL_HEADERS_REQUEST.md."
+    fi
+    echo
+    echo "Nothing was changed."
+    exit 1
+fi
+
 if ! modinfo v4l2loopback >/dev/null 2>&1; then
     echo "Installing v4l2loopback (builds a kernel module via DKMS)..."
     sudo apt-get install -y v4l2loopback-dkms
