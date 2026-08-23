@@ -5,6 +5,10 @@
 # confirming the ImgU sits in a safe IOMMU domain.
 set -euo pipefail
 
+# Escalation is chosen by the caller: plain sudo in a terminal,
+# "sudo -A" under the GUI, which has no tty to prompt on.
+SUDO="${FIXER_SUDO:-sudo}"
+
 MODE="${1:?usage: build.sh hardware|software}"
 WORK="${XDG_CACHE_HOME:-$HOME/.cache}/chromebook-fixer/libcamera"
 BACKUP="$WORK/usr-backup"
@@ -30,7 +34,7 @@ if [ ! -d libcamera-src ]; then
     rm -rf src-tmp && mkdir src-tmp && cd src-tmp
     apt-get source libcamera >/dev/null 2>&1 \
         || { echo "apt-get source libcamera failed. Enable deb-src, then:"; \
-             echo "  sudo apt build-dep libcamera"; exit 1; }
+             echo "  $SUDO apt build-dep libcamera"; exit 1; }
     DIR=$(find . -maxdepth 1 -type d -name 'libcamera-*' | head -1)
     [ -n "$DIR" ] || { echo "could not find unpacked source"; exit 1; }
     cd "$WORK" && mv "src-tmp/$DIR" libcamera-src && rm -rf src-tmp
@@ -87,7 +91,7 @@ for entry in "${FILES[@]}"; do
     if [ -e "$dst" ]; then
         mkdir -p "$BACKUP$(dirname "$dst")"
         cp -a "$dst" "$BACKUP$dst" 2>/dev/null || \
-            sudo cp -a "$dst" "$BACKUP$dst"
+            $SUDO cp -a "$dst" "$BACKUP$dst"
     fi
 done
 
@@ -95,16 +99,19 @@ echo "Installing..."
 for entry in "${FILES[@]}"; do
     src="${entry%%:*}"; rest="${entry#*:}"; dst="${rest%:*}"; mode="${rest##*:}"
     [ -s "$src" ] || { echo "missing build output: $src"; exit 1; }
-    sudo install -o root -g root -m "$mode" "$src" "$dst"
+    $SUDO install -o root -g root -m "$mode" "$src" "$dst"
 done
 
 # The GPU debayer has no IPU3 unpacking path; force the CPU one so the software
 # ISP produces a debayered stream rather than falling back to raw Bayer.
-sudo mkdir -p /etc/libcamera
-printf 'version: 1\nconfiguration:\n  software_isp:\n    mode: cpu\n' \
-    | sudo tee /etc/libcamera/configuration.yaml >/dev/null
+$SUDO mkdir -p /etc/libcamera
+$SUDO tee /etc/libcamera/configuration.yaml >/dev/null \
+    <<< 'version: 1
+configuration:
+  software_isp:
+    mode: cpu'
 
-sudo ldconfig
+$SUDO ldconfig
 systemctl --user restart pipewire.socket pipewire wireplumber 2>/dev/null || true
 sleep 3
 echo "Installed the $MODE ISP path. Backup of the previous install: $BACKUP"

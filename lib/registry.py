@@ -163,6 +163,13 @@ class Fix:
         env["FIXER_REPO"] = str(REPO)
         env["FIX_ID"] = self.id
 
+        # Scripts use "$SUDO", never a bare "sudo", so that escalation works
+        # both in a terminal and under the GUI. See sudo_command().
+        cmd, askpass = sudo_command()
+        env["FIXER_SUDO"] = cmd
+        if askpass:
+            env["SUDO_ASKPASS"] = askpass
+
         try:
             proc = subprocess.run(
                 [str(script)], env=env, timeout=1800,
@@ -204,6 +211,57 @@ class Fix:
                 return "ok", out
             return "unknown", out
         return "unknown", "no detect script"
+
+
+ASKPASS_HELPERS = (
+    "/usr/bin/ssh-askpass",
+    "/usr/bin/ssh-askpass-gnome",
+    "/usr/libexec/openssh/gnome-ssh-askpass",
+    "/usr/lib/ssh/x11-ssh-askpass",
+    "/usr/bin/lxqt-openssh-askpass",
+)
+
+
+def _has_terminal() -> bool:
+    """Can a fix script prompt for a password on a terminal?"""
+    if os.environ.get("FIXER_NO_TTY"):
+        return False                      # the GUI says so explicitly
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY)
+    except OSError:
+        return False
+    os.close(fd)
+    return True
+
+
+def _find_askpass() -> str | None:
+    existing = os.environ.get("SUDO_ASKPASS")
+    if existing and Path(existing).exists():
+        return existing
+    return next((h for h in ASKPASS_HELPERS if Path(h).exists()), None)
+
+
+def sudo_command() -> tuple[str, str | None]:
+    """
+    Decide how fix scripts should escalate, as (command, askpass helper).
+
+    sudo consults SUDO_ASKPASS *only* when invoked as `sudo -A`. Setting the
+    variable alone does nothing, so a script running under the GUI - which has
+    no controlling terminal - fails with "sudo: A terminal is required to
+    authenticate" no matter what the environment says.
+
+    In a real terminal plain `sudo` is the right answer: prompting on the tty
+    is what the user expects, and forcing -A there would demand a graphical
+    askpass helper for an ordinary CLI run, including over ssh.
+    """
+    if _has_terminal():
+        return "sudo", None
+    askpass = _find_askpass()
+    if askpass:
+        return "sudo -A", askpass
+    # No terminal and no helper. Leave plain sudo so the user sees sudo's own
+    # diagnosis rather than a silent difference in behaviour.
+    return "sudo", None
 
 
 def load_fixes() -> list[Fix]:

@@ -152,6 +152,16 @@ Guidelines that matter more than they look:
   pipeline as failed *even though the match succeeded*. This silently made a
   verify script misreport which ISP was in use. Capture output to a variable
   first, then match against it.
+- **Escalate with `$SUDO`, never a bare `sudo`.** The CLI exports `FIXER_SUDO`
+  and every script starts with `SUDO="${FIXER_SUDO:-sudo}"`. In a terminal that
+  resolves to plain `sudo`; under the GUI, which has no controlling terminal,
+  it becomes `sudo -A` with a graphical askpass. A bare `sudo` there dies with
+  *"sudo: A terminal is required to authenticate"* — setting `SUDO_ASKPASS` on
+  its own does nothing, because sudo consults that variable only under `-A`.
+- **Keep `$SUDO` out of pipelines.** `echo x | $SUDO tee f` runs sudo in a
+  forked subshell, and with no tty sudo caches its credential per *parent
+  process* — so each pipeline prompts for the password again. Use
+  `$SUDO tee f <<< "x"` and the whole script authenticates once.
 - **Write the `danger` field from experience.** Generic caution teaches nobody
   anything; "this locked the machine three times and left the boot filesystem
   dirty" tells someone exactly how much care to take.

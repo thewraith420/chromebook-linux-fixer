@@ -1,6 +1,10 @@
 #!/bin/bash
 set -uo pipefail
 
+# Escalation is chosen by the caller: plain sudo in a terminal,
+# "sudo -A" under the GUI, which has no tty to prompt on.
+SUDO="${FIXER_SUDO:-sudo}"
+
 RUNNING=$(uname -r)
 TARGET="${FIXER_KERNEL:-$RUNNING}"
 
@@ -19,14 +23,14 @@ if ! "$FIXER_REPO/lib/dkms-support.sh" --kernel "$TARGET" 2>/dev/null; then
     fi
     echo
     echo "Either way, a wedged ImgU can be recovered right now with no build:"
-    echo "    sudo sh -c 'echo 0000:00:05.0 > /sys/bus/pci/drivers/ipu3-imgu/unbind'"
-    echo "    sudo sh -c 'echo 0000:00:05.0 > /sys/bus/pci/drivers/ipu3-imgu/bind'"
+    echo "    $SUDO sh -c 'echo 0000:00:05.0 > /sys/bus/pci/drivers/ipu3-imgu/unbind'"
+    echo "    $SUDO sh -c 'echo 0000:00:05.0 > /sys/bus/pci/drivers/ipu3-imgu/bind'"
     echo "That clears the leak; it does not stop it recurring."
     exit 1
 fi
 
 command -v dkms >/dev/null 2>&1 || {
-    echo "dkms is not installed:  sudo apt install dkms"; exit 1; }
+    echo "dkms is not installed:  $SUDO apt install dkms"; exit 1; }
 
 SRC="$FIX_DIR/src"
 if [ ! -f "$SRC/ipu3-imgu.c" ]; then

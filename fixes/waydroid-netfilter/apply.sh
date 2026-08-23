@@ -1,10 +1,14 @@
 #!/bin/bash
 set -euo pipefail
+
+# Escalation is chosen by the caller: plain sudo in a terminal,
+# "sudo -A" under the GUI, which has no tty to prompt on.
+SUDO="${FIXER_SUDO:-sudo}"
 SCRIPT=/usr/lib/waydroid/data/scripts/waydroid-net.sh
 BACKUP="$SCRIPT.chromebook-fixer.orig"
-[ -f "$BACKUP" ] || sudo cp -a "$SCRIPT" "$BACKUP"
+[ -f "$BACKUP" ] || $SUDO cp -a "$SCRIPT" "$BACKUP"
 # Swap the preference order: try plain (nft-backed) iptables before legacy.
-sudo python3 - "$SCRIPT" <<'PY'
+$SUDO python3 - "$SCRIPT" <<'PY'
 import re, sys
 p = sys.argv[1]
 s = open(p).read()

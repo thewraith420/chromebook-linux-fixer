@@ -33,15 +33,17 @@ STATE_TEXT = {
 
 def askpass_env():
     """
-    Fix scripts use sudo. In a GUI there is no terminal to type into, so point
-    sudo at a graphical askpass. Without one, apply would appear to hang.
+    Fix scripts escalate with sudo, and there is no terminal here to type a
+    password into. Setting SUDO_ASKPASS alone is not enough - sudo reads it
+    only when invoked as `sudo -A` - so tell the CLI it has no tty and let
+    registry.sudo_command() pick the right form and locate a helper.
+
+    Announcing it rather than letting the CLI probe for /dev/tty matters when
+    the GUI is launched *from* a terminal: that tty exists but the user is
+    looking at this window, so a prompt there would look like a hang.
     """
     env = dict(os.environ)
-    for helper in ("/usr/bin/ssh-askpass", "/usr/lib/ssh/x11-ssh-askpass",
-                   "/usr/bin/lxqt-openssh-askpass"):
-        if Path(helper).exists():
-            env["SUDO_ASKPASS"] = helper
-            break
+    env["FIXER_NO_TTY"] = "1"
     return env
 
 

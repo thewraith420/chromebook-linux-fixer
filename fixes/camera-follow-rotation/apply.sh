@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+# Escalation is chosen by the caller: plain sudo in a terminal,
+# "sudo -A" under the GUI, which has no tty to prompt on.
+SUDO="${FIXER_SUDO:-sudo}"
+
 # v4l2loopback is an out-of-tree module, so it must be buildable for the kernel
 # that is actually running - not merely for some installed kernel. DKMS will
 # happily build for every kernel it has headers for and silently skip the one
@@ -28,20 +32,20 @@ fi
 
 if ! modinfo v4l2loopback >/dev/null 2>&1; then
     echo "Installing v4l2loopback (builds a kernel module via DKMS)..."
-    sudo apt-get install -y v4l2loopback-dkms
+    $SUDO apt-get install -y v4l2loopback-dkms
 fi
 
 # Load now, and on every boot, with a stable card label the daemon looks for.
-sudo tee /etc/modprobe.d/chromebook-camera-loopback.conf >/dev/null <<'CONF'
+$SUDO tee /etc/modprobe.d/chromebook-camera-loopback.conf >/dev/null <<'CONF'
 # Loopback device used to republish the camera with rotation applied.
 # exclusive_caps=1 makes it advertise itself as capture-only once a producer is
 # attached, which is what applications expect from a webcam.
 options v4l2loopback card_label="Chromebook Camera" exclusive_caps=1 max_buffers=2
 CONF
-echo "v4l2loopback" | sudo tee /etc/modules-load.d/chromebook-camera-loopback.conf >/dev/null
+$SUDO tee /etc/modules-load.d/chromebook-camera-loopback.conf >/dev/null <<< "v4l2loopback"
 
-sudo modprobe -r v4l2loopback 2>/dev/null || true
-sudo modprobe v4l2loopback
+$SUDO modprobe -r v4l2loopback 2>/dev/null || true
+$SUDO modprobe v4l2loopback
 sleep 1
 
 DEV=""
