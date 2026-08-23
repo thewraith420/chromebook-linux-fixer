@@ -35,7 +35,12 @@ against a `BobZKernel` tree:
 - **9204** — `ipu3-imgu`: place the device in an IOMMU identity domain via a
   per-device quirk, because the driver programs its MMU with raw physical
   addresses and cannot work in a translated domain. Without this, streaming the
-  ImgU hard locks the machine.
+  ImgU hard locks the machine. **This must be carried forever on any
+  mainline-derived kernel** — the equivalent upstream patch was *rejected*, so
+  mainline will not grow one. Ubuntu ships it as SAUCE, which is why stock
+  Ubuntu kernels need no quirk of their own. Full history, the upstream diff,
+  and the maintainer's objection:
+  [`ipu3-imgu-iommu-upstream-reference.md`](ipu3-imgu-iommu-upstream-reference.md).
 - DMI quirk exposing camera sensor rotation and front/back orientation for
   machines whose firmware omits the ChromeOS SSDB table.
 
