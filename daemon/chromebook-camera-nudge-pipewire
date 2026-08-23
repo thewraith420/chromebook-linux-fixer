@@ -1,0 +1,37 @@
+#!/bin/bash
+# Make PipeWire notice the loopback once it is actually producing frames.
+#
+# v4l2loopback with exclusive_caps=1 advertises OUTPUT only until a producer
+# attaches, and flips to CAPTURE afterwards. WirePlumber probes the device when
+# it appears - at boot, long before our daemon starts - caches "not a capture
+# device", and nothing re-probes it when the capability changes. The result is
+# a loopback that works perfectly at the V4L2 level but never becomes a
+# selectable camera, while applications are still offered the real sensor that
+# our daemon is holding open. That looks exactly like "the fix broke my camera".
+#
+# Re-probing one device would need a udev change event, which needs root. A
+# WirePlumber restart is the unprivileged equivalent and costs a brief audio
+# blip. Wait for the producer first, or the restart races the same way.
+set -uo pipefail
+
+DEV="${1:-}"
+if [ -z "$DEV" ]; then
+    for n in /sys/class/video4linux/video*/name; do
+        grep -qi "chromebook camera" "$n" 2>/dev/null \
+            && DEV="/dev/$(basename "$(dirname "$n")")"
+    done
+fi
+[ -n "$DEV" ] || { echo "no loopback device found; not nudging pipewire"; exit 0; }
+
+for _ in $(seq 40); do
+    caps=$(v4l2-ctl -d "$DEV" --all 2>/dev/null | sed -n '/Device Caps/,/^[^\t]/p')
+    case "$caps" in
+        *"Video Capture"*)
+            systemctl --user restart wireplumber
+            echo "pipewire re-probed; $DEV should now be selectable"
+            exit 0 ;;
+    esac
+    sleep 0.5
+done
+echo "$DEV never advertised Video Capture; leaving pipewire alone"
+exit 0

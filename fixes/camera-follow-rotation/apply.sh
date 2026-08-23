@@ -40,11 +40,28 @@ $SUDO tee /etc/modprobe.d/chromebook-camera-loopback.conf >/dev/null <<'CONF'
 # Loopback device used to republish the camera with rotation applied.
 # exclusive_caps=1 makes it advertise itself as capture-only once a producer is
 # attached, which is what applications expect from a webcam.
-options v4l2loopback card_label="Chromebook Camera" exclusive_caps=1 max_buffers=2
+# video_nr=31 keeps it out of the way. Left to itself the loopback claims
+# /dev/video0 and pushes every real device up by one, which silently
+# invalidates anything that recorded a video node number.
+options v4l2loopback video_nr=31 card_label="Chromebook Camera" exclusive_caps=1 max_buffers=2
 CONF
 $SUDO tee /etc/modules-load.d/chromebook-camera-loopback.conf >/dev/null <<< "v4l2loopback"
 
+# Stop any previous instance first. The daemon holds the loopback open, so
+# "modprobe -r" would fail, the "|| true" would swallow it, and the reload
+# would quietly keep the module's old options - meaning a re-apply appears to
+# succeed while changing nothing.
+if systemctl --user is-active --quiet chromebook-camera-rotate.service; then
+    echo "stopping the running rotation daemon so the module can reload"
+    systemctl --user stop chromebook-camera-rotate.service
+fi
 $SUDO modprobe -r v4l2loopback 2>/dev/null || true
+if lsmod | grep -q '^v4l2loopback'; then
+    echo "v4l2loopback is still in use and could not be reloaded:"
+    fuser -v /dev/video* 2>&1 | grep -i "chromebook\|video" || true
+    echo "close whatever is using it, or reboot, then re-apply."
+    exit 1
+fi
 $SUDO modprobe v4l2loopback
 sleep 1
 
@@ -68,6 +85,10 @@ Type=simple
 ExecStart=$FIXER_REPO/daemon/chromebook-camera-rotate --width 1280 --height 720
 Restart=on-failure
 RestartSec=5
+# The loopback only advertises CAPTURE once this daemon attaches, and
+# WirePlumber probed it long before that. Without this it never becomes a
+# selectable camera. Runs on every start, because the race repeats each boot.
+ExecStartPost=$FIXER_REPO/daemon/chromebook-camera-nudge-pipewire
 
 [Install]
 WantedBy=graphical-session.target
@@ -77,7 +98,10 @@ systemctl --user daemon-reload
 systemctl --user enable --now chromebook-camera-rotate.service
 sleep 4
 if systemctl --user is-active chromebook-camera-rotate.service >/dev/null 2>&1; then
-    echo "running. Select \"Chromebook Camera\" in your camera application."
+    echo "running. Applications should now offer \"Chromebook Camera\"."
+    echo
+    echo "The real sensor is held open by this daemon, so it is no longer"
+    echo "offered separately - that is expected, not a failure."
 else
     echo "service failed to start:"
     systemctl --user status chromebook-camera-rotate.service --no-pager -n 15
