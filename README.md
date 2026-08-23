@@ -94,7 +94,7 @@ Each fix is a directory under `fixes/` with a `fix.yaml` and up to four scripts:
 | script | meaning |
 |---|---|
 | `detect.sh` | exit 0 = the problem is present here; 1 = not needed; 2 = can't tell |
-| `verify.sh` | exit 0 = our fix is in place and working |
+| `verify.sh` | exit 0 = our fix is in place and working; 3 = the desired state holds, but something other than this fix achieved it |
 | `apply.sh`  | install it |
 | `revert.sh` | undo it |
 
@@ -102,6 +102,18 @@ Each fix is a directory under `fixes/` with a `fix.yaml` and up to four scripts:
 deliberate. "The problem exists" and "our fix is installed" are not the same
 thing — conflating them means you cannot notice that a distro update fixed
 something upstream, or that a package upgrade silently clobbered your fix.
+
+**Exit 3 exists because "the machine is fine" is not the same as "we fixed
+it".** The IPU3 IOMMU fix found this the hard way: mainline carries a VT-d quirk
+that puts the Intel IPU in a passthrough domain by itself, so on a stock kernel
+the fix's `verify` saw a safe `identity` domain and reported **applied** — on a
+machine whose bootloader it had never touched. A user reading that would believe
+a boot parameter had been added when none had. Exit 3 reports *not needed*
+instead, and leaves Apply disabled, since there is nothing to add.
+
+Write `verify` to check **the thing your fix installs** — your file, your
+marker, your parameter — not the symptom being gone. Where the symptom can also
+vanish on its own, say so with exit 3.
 
 `fix.yaml` declares metadata and, crucially, hazards:
 

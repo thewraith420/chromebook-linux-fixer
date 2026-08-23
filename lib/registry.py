@@ -188,6 +188,14 @@ class Fix:
             code, out = self.run("verify")
             if code == 0:
                 return "applied", out
+            if code == 3:
+                # "The desired state holds, but this fix is not what achieved
+                # it" - a kernel quirk, an upstream change, or the distro
+                # already doing the right thing. Reporting "applied" here would
+                # credit the tool for a change it never made, and would leave a
+                # user believing their bootloader had been edited when it had
+                # not. Treat it as nothing-to-do and skip detect.
+                return "ok", out
         if self.has("detect"):
             code, out = self.run("detect")
             if code == 0:
