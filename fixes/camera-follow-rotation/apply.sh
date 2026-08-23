@@ -38,12 +38,20 @@ fi
 # Load now, and on every boot, with a stable card label the daemon looks for.
 $SUDO tee /etc/modprobe.d/chromebook-camera-loopback.conf >/dev/null <<'CONF'
 # Loopback device used to republish the camera with rotation applied.
-# exclusive_caps=1 makes it advertise itself as capture-only once a producer is
-# attached, which is what applications expect from a webcam.
+#
+# exclusive_caps=0 is deliberate, despite exclusive_caps=1 being the usual
+# advice. With 1, the device advertises CAPTURE only while a producer is
+# actively streaming - so the daemon would have to hold the sensor open
+# forever, keeping the hardware privacy LED lit and burning half a CPU core
+# at idle. With 0 the device always advertises CAPTURE, so the daemon can
+# open the sensor only when something actually reads the loopback. It also
+# removes a race: WirePlumber probes the device at boot, and under
+# exclusive_caps=1 it saw OUTPUT-only and never offered it as a camera.
+#
 # video_nr=31 keeps it out of the way. Left to itself the loopback claims
 # /dev/video0 and pushes every real device up by one, which silently
 # invalidates anything that recorded a video node number.
-options v4l2loopback video_nr=31 card_label="Chromebook Camera" exclusive_caps=1 max_buffers=2
+options v4l2loopback video_nr=31 card_label="Chromebook Camera" exclusive_caps=0 max_buffers=2
 CONF
 $SUDO tee /etc/modules-load.d/chromebook-camera-loopback.conf >/dev/null <<< "v4l2loopback"
 

@@ -23,6 +23,15 @@ if [ -z "$DEV" ]; then
 fi
 [ -n "$DEV" ] || { echo "no loopback device found; not nudging pipewire"; exit 0; }
 
+# With exclusive_caps=0 the device advertises CAPTURE from boot, so WirePlumber
+# will already have offered it and there is nothing to fix. Restarting it
+# anyway would blip the user's audio at every single login.
+if wpctl status 2>/dev/null | sed -n '/^Video/,/^Settings/p' \
+        | sed -n '/Sources:/,/Filters/p' | grep -qi "chromebook camera"; then
+    echo "pipewire already offers the loopback; nothing to do"
+    exit 0
+fi
+
 for _ in $(seq 40); do
     caps=$(v4l2-ctl -d "$DEV" --all 2>/dev/null | sed -n '/Device Caps/,/^[^\t]/p')
     case "$caps" in

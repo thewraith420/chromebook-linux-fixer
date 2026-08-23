@@ -16,8 +16,16 @@ videoflip's video-direction can be changed while the pipeline is PLAYING, so
 rotation follows the accelerometer live without interrupting the stream.
 
 Cost: one extra copy and a rotation per frame. Keep the resolution modest.
+
+The sensor is only opened while something is actually reading the loopback.
+Holding it open permanently keeps the hardware privacy LED lit and burns most
+of a CPU core for nobody, which is not a reasonable thing to do at every login.
+That requires exclusive_caps=0 on the loopback: with exclusive_caps=1 the
+device advertises CAPTURE only while a producer streams, so an idle daemon
+would make the camera disappear from every application.
 """
 
+import os
 import signal
 import sys
 
@@ -43,6 +51,12 @@ ORIENTATION_TO_FLIP = {
 
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
+
+POLL_SECONDS = 2
+# Stop only after this many consecutive empty polls. Applications routinely
+# close and immediately reopen the device while negotiating a format, and
+# tearing the sensor down in that gap makes them fail rather than reconnect.
+IDLE_POLLS_BEFORE_STOP = 2
 
 
 def log(msg):
@@ -95,17 +109,72 @@ class CameraRotator:
                               Gio.DBusCallFlags.NONE, -1, None)
         self.sensor.connect("g-properties-changed", self.on_orientation)
 
-        self.pipeline.set_state(Gst.State.PLAYING)
-        self.apply_current()
-        log(f"publishing rotated camera on {loopback}")
+        self.device = loopback
+        self.streaming = False
+        self.idle_polls = 0
+        GLib.timeout_add_seconds(POLL_SECONDS, self.poll_consumers)
+        log(f"ready on {loopback}; the sensor opens when something reads it")
 
     def on_error(self, _bus, message):
         err, debug = message.parse_error()
         log(f"pipeline error: {err.message}")
         if debug:
             log(f"  {debug}")
+        # Return to idle rather than exiting. A transient failure - the sensor
+        # briefly held by something else, say - should not take the service
+        # down and leave the camera missing until the next login.
         self.pipeline.set_state(Gst.State.NULL)
-        sys.exit(1)
+        self.streaming = False
+        self.idle_polls = 0
+
+    # -- on-demand streaming ----------------------------------------------
+
+    def consumers(self):
+        """PIDs other than ours with the loopback open."""
+        target = os.path.realpath(self.device)
+        mine = os.getpid()
+        found = set()
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit() or int(entry) == mine:
+                continue
+            fddir = f"/proc/{entry}/fd"
+            try:
+                names = os.listdir(fddir)
+            except OSError:
+                continue                      # gone, or not ours to look at
+            for fd in names:
+                try:
+                    if os.path.realpath(f"{fddir}/{fd}") == target:
+                        found.add(int(entry))
+                        break
+                except OSError:
+                    pass
+        return found
+
+    def poll_consumers(self):
+        readers = self.consumers()
+        if readers and not self.streaming:
+            self.start_stream(readers)
+        elif not readers and self.streaming:
+            self.idle_polls += 1
+            if self.idle_polls >= IDLE_POLLS_BEFORE_STOP:
+                self.stop_stream()
+        elif readers:
+            self.idle_polls = 0
+        return True                            # keep the timer
+
+    def start_stream(self, readers):
+        self.pipeline.set_state(Gst.State.PLAYING)
+        self.streaming = True
+        self.idle_polls = 0
+        self.apply_current()
+        log(f"reader(s) {sorted(readers)} attached - sensor on")
+
+    def stop_stream(self):
+        self.pipeline.set_state(Gst.State.NULL)
+        self.streaming = False
+        self.idle_polls = 0
+        log("no readers left - sensor released, privacy LED off")
 
     def on_orientation(self, _proxy, changed, _invalidated):
         if "AccelerometerOrientation" in changed.unpack():
@@ -120,9 +189,11 @@ class CameraRotator:
         if direction is None:
             return
         # Safe while PLAYING: videoflip declares video-direction changeable in
-        # any state, so the stream is never interrupted.
+        # any state, so the stream is never interrupted. Setting it while idle
+        # is harmless too - start_stream() re-applies the current orientation.
         self.flip.set_property("video-direction", direction)
-        log(f"orientation {orientation} -> video-direction {direction}")
+        if self.streaming:
+            log(f"orientation {orientation} -> video-direction {direction}")
 
     def stop(self):
         self.pipeline.set_state(Gst.State.NULL)
