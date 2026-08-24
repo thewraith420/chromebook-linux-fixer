@@ -20,14 +20,23 @@ description: |
   Settings keeps working, and releases the accelerometer while locked so the
   sensor can power down.
 
-  Camera applications additionally pin the screen to landscape while they are
-  open, because a camera sensor is fixed to the chassis: a rotating screen
-  shows a sideways picture inside an upright window. Landscape is derived from
-  the panel's own mode rather than assumed to be transform 0, since several
-  Chromebook tablets ship portrait-native panels. Apps are detected by the bus
-  name their GtkApplication owns, so this costs nothing while idle. GNOME
-  Camera and Slate Camera Settings are recognised by default; override with
-  CHROMEBOOK_HOLD_LANDSCAPE (comma-separated bus names, empty to disable).
+  GNOME Camera (Snapshot) additionally pins the screen to landscape while it is
+  open, so the preview fills the screen instead of showing a sideways picture
+  in an upright window - a camera sensor is fixed to the chassis, so it cannot
+  follow the display. Auto-rotation is untouched the rest of the time: the
+  orientation lock is taken only for the life of that window, restored when it
+  closes, and restored again if this service exits while holding it.
+
+  Landscape is derived from the panel's own mode rather than assumed to be
+  transform 0, since several Chromebook tablets ship portrait-native panels.
+  Detection is by the bus name the application owns, so it costs nothing while
+  idle. Override the list with CHROMEBOOK_HOLD_LANDSCAPE (comma-separated bus
+  names, empty to disable).
+
+  Where mutter already rotates the panel itself - it reports
+  PanelOrientationManaged - this service does not rotate as well, which would
+  put two controllers on one display. It provides only the landscape hold,
+  which mutter has no equivalent for.
 danger: |
   If a GNOME extension on this machine already does auto-rotation, both will
   drive the display independently. Disable one of them.

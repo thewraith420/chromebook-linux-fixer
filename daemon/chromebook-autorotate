@@ -53,7 +53,6 @@ LOCK_KEY = "orientation-lock"
 # CHROMEBOOK_HOLD_LANDSCAPE; set it empty to disable the behaviour entirely.
 DEFAULT_HOLD_LANDSCAPE = (
     "org.gnome.Snapshot",                   # GNOME Camera
-    "org.bobzkernel.SlateCameraSettings",
 )
 
 # mutter transform values
@@ -91,6 +90,15 @@ class AutoRotate:
             log("no accelerometer reported by iio-sensor-proxy; nothing to do")
             sys.exit(0)
 
+        # Where mutter accepts the machine as a tablet it rotates the panel
+        # itself. Rotating it as well would give the display two independent
+        # controllers fighting over it, so step back and provide only the
+        # camera landscape hold, which mutter has no equivalent for.
+        managed = self.display.get_cached_property("PanelOrientationManaged")
+        self.mutter_rotates = bool(managed and managed.unpack())
+        if self.mutter_rotates:
+            log("mutter already rotates this panel; camera hold only")
+
         self.settings = None
         source = Gio.SettingsSchemaSource.get_default()
         if source and source.lookup(LOCK_SCHEMA, True):
@@ -101,6 +109,7 @@ class AutoRotate:
         self.sensor.connect("g-properties-changed", self.on_sensor_changed)
 
         self.holders = set()
+        self.prev_lock = False
         self.watches = []
         for name in self._hold_names():
             self.watches.append(Gio.bus_watch_name(
@@ -122,7 +131,7 @@ class AutoRotate:
         one client holds a claim. Release it while locked so the sensor can
         idle rather than spinning for readings nobody will act on.
         """
-        want = not self.locked
+        want = not self.locked and not self.mutter_rotates
         if want == self.claimed:
             return
         try:
@@ -162,15 +171,41 @@ class AutoRotate:
         self.holders.discard(name)
         if not self.holders:
             log(f"{name} closed; following the accelerometer again")
-            self.apply_current()
+            self.release_hold()
 
     def apply_hold(self):
-        """Pin to whichever transform makes the built-in panel wider than tall."""
+        """
+        Pin to whichever transform makes the built-in panel wider than tall.
+
+        Rotating is not enough on its own: whoever manages orientation - mutter
+        here, ourselves elsewhere - will simply rotate it back on the next
+        accelerometer reading. Take the orientation lock first so the rotation
+        sticks, then restore it afterwards.
+        """
+        self.prev_lock = self.locked
+        if self.prev_lock:
+            log("orientation is already locked; leaving it as the user set it")
+            return
+        if self.settings is not None:
+            self.settings.set_boolean(LOCK_KEY, True)
         transform = self.landscape_transform()
         if transform is None or transform == self.last_transform:
             return
         if self.set_transform(transform):
             self.last_transform = transform
+
+    def release_hold(self):
+        """Give rotation back to whoever was doing it."""
+        if self.prev_lock:
+            return                     # it was the user's lock, not ours
+        if self.settings is not None:
+            self.settings.set_boolean(LOCK_KEY, False)
+        # Apply the current orientation ourselves rather than waiting. Handing
+        # rotation back does not necessarily re-apply it: mutter acts on the
+        # next accelerometer *change*, so an unlocked screen can sit in
+        # landscape until the device is tilted. Doing it here is idempotent -
+        # if mutter also acts, both arrive at the same transform.
+        self.apply_current()
 
     def landscape_transform(self):
         """
@@ -198,6 +233,8 @@ class AutoRotate:
     # -- rotation --------------------------------------------------------
 
     def on_sensor_changed(self, _proxy, changed, _invalidated):
+        if self.mutter_rotates:
+            return
         if "AccelerometerOrientation" in changed.unpack():
             self.apply_current()
 
@@ -283,6 +320,11 @@ def main():
     try:
         loop.run()
     finally:
+        # Never exit still holding the lock - that would leave the user with
+        # auto-rotation silently switched off and no obvious cause.
+        if rotator.holders:
+            rotator.holders.clear()
+            rotator.release_hold()
         if rotator.claimed:
             try:
                 rotator.sensor.call_sync("ReleaseAccelerometer", None,
