@@ -19,6 +19,15 @@ description: |
   Honours the existing orientation-lock setting, so the lock control in Quick
   Settings keeps working, and releases the accelerometer while locked so the
   sensor can power down.
+
+  Camera applications additionally pin the screen to landscape while they are
+  open, because a camera sensor is fixed to the chassis: a rotating screen
+  shows a sideways picture inside an upright window. Landscape is derived from
+  the panel's own mode rather than assumed to be transform 0, since several
+  Chromebook tablets ship portrait-native panels. Apps are detected by the bus
+  name their GtkApplication owns, so this costs nothing while idle. GNOME
+  Camera and Slate Camera Settings are recognised by default; override with
+  CHROMEBOOK_HOLD_LANDSCAPE (comma-separated bus names, empty to disable).
 danger: |
   If a GNOME extension on this machine already does auto-rotation, both will
   drive the display independently. Disable one of them.

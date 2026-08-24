@@ -15,8 +15,16 @@ not break every time the shell's extension API changes:
 
 It honours the same orientation-lock setting the shell uses, so the existing
 lock control in Quick Settings keeps working.
+
+Camera applications additionally pin the screen to landscape while they are
+open. A camera sensor is bolted to the chassis in one fixed orientation, so a
+rotating screen shows a sideways picture in an upright window. Holding the
+screen still is the cheap fix for that - the expensive one is rotating every
+frame through a loopback device, which keeps the sensor powered and the privacy
+LED lit. Apps are watched by bus name, so this costs nothing while idle.
 """
 
+import os
 import signal
 import sys
 
@@ -39,6 +47,14 @@ DISPLAY_PATH = "/org/gnome/Mutter/DisplayConfig"
 
 LOCK_SCHEMA = "org.gnome.settings-daemon.peripherals.touchscreen"
 LOCK_KEY = "orientation-lock"
+
+# Applications that should hold the screen in landscape while running, by the
+# bus name their GtkApplication owns. Override with a comma-separated list in
+# CHROMEBOOK_HOLD_LANDSCAPE; set it empty to disable the behaviour entirely.
+DEFAULT_HOLD_LANDSCAPE = (
+    "org.gnome.Snapshot",                   # GNOME Camera
+    "org.bobzkernel.SlateCameraSettings",
+)
 
 # mutter transform values
 TRANSFORMS = {
@@ -83,6 +99,14 @@ class AutoRotate:
                                   lambda *_: self.update_claim())
 
         self.sensor.connect("g-properties-changed", self.on_sensor_changed)
+
+        self.holders = set()
+        self.watches = []
+        for name in self._hold_names():
+            self.watches.append(Gio.bus_watch_name(
+                Gio.BusType.SESSION, name, Gio.BusNameWatcherFlags.NONE,
+                self.on_app_appeared, self.on_app_vanished))
+
         self.update_claim()
 
     # -- accelerometer claim ---------------------------------------------
@@ -114,6 +138,63 @@ class AutoRotate:
         if want:
             self.apply_current()
 
+    # -- landscape hold for camera apps -----------------------------------
+
+    @staticmethod
+    def _hold_names():
+        override = os.environ.get("CHROMEBOOK_HOLD_LANDSCAPE")
+        if override is None:
+            return DEFAULT_HOLD_LANDSCAPE
+        return tuple(n.strip() for n in override.split(",") if n.strip())
+
+    def on_app_appeared(self, _bus, name, _owner):
+        self.holders.add(name)
+        if len(self.holders) == 1:
+            log(f"{name} open; holding the screen in landscape")
+            self.apply_hold()
+
+    def on_app_vanished(self, _bus, name):
+        # bus_watch_name calls this once at startup for every name that is not
+        # currently owned, so ignore anything we never saw appear - otherwise
+        # the log claims apps "closed" that were never open.
+        if name not in self.holders:
+            return
+        self.holders.discard(name)
+        if not self.holders:
+            log(f"{name} closed; following the accelerometer again")
+            self.apply_current()
+
+    def apply_hold(self):
+        """Pin to whichever transform makes the built-in panel wider than tall."""
+        transform = self.landscape_transform()
+        if transform is None or transform == self.last_transform:
+            return
+        if self.set_transform(transform):
+            self.last_transform = transform
+
+    def landscape_transform(self):
+        """
+        0 on a landscape-native panel, 1 on a portrait-native one.
+
+        Not every convertible is landscape by default - several Chromebook
+        tablets ship a portrait panel and rely on a transform to look normal -
+        so "horizontal" has to be derived from the mode, not assumed to be 0.
+        """
+        try:
+            state = self.display.call_sync(
+                "GetCurrentState", None, Gio.DBusCallFlags.NONE, -1, None)
+        except GLib.Error as err:
+            log(f"GetCurrentState failed: {err.message}")
+            return None
+        _serial, monitors, _logical, _props = state.unpack()
+        for _connector_info, modes, mon_props in monitors:
+            if not mon_props.get("is-builtin"):
+                continue
+            for mode in modes:
+                if mode[6].get("is-current"):
+                    return 0 if mode[1] >= mode[2] else 1
+        return None
+
     # -- rotation --------------------------------------------------------
 
     def on_sensor_changed(self, _proxy, changed, _invalidated):
@@ -123,6 +204,8 @@ class AutoRotate:
     def apply_current(self):
         if self.locked:
             return
+        if self.holders:
+            return          # a camera app is open; the screen stays put
         prop = self.sensor.get_cached_property("AccelerometerOrientation")
         if prop is None:
             return
