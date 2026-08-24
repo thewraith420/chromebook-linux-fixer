@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """chromebook-autorotate — rotate the built-in display to match the accelerometer.
 
 GNOME's own auto-rotation depends on mutter deciding the machine is in "tablet

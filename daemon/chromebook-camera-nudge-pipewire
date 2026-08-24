@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Make PipeWire notice the loopback once it is actually producing frames.
 #
 # v4l2loopback with exclusive_caps=1 advertises OUTPUT only until a producer

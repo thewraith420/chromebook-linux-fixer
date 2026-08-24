@@ -60,6 +60,25 @@ hardware automatically.
 
 ---
 
+## Installing
+
+```
+git clone https://github.com/<you>/chromebook-linux-fixer.git
+cd chromebook-linux-fixer
+./install.sh          # per-user: symlinks into ~/.local/bin, adds a menu entry
+chromebook-fixer status
+```
+
+No root is needed to install. The tool asks for privileges per fix, only when a
+fix actually needs them, so there is no reason to install it as root. Running
+from a clone without installing works too - every path is resolved relative to
+the repository.
+
+`./uninstall.sh` removes the symlinks and the menu entry. It deliberately does
+*not* revert applied fixes; use `chromebook-fixer revert <id>` for those.
+
+---
+
 ## Usage
 
 ```
@@ -182,3 +201,12 @@ Early. Working CLI, hardware matching, and a first set of fixes ported from
 hand-rolled scripts. Contributions for other models are welcome — the fix
 format is designed so that adding a model is data plus a detect script, not a
 rewrite.
+
+## Licence
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+Contributions are welcome, particularly for models other than the Pixel Slate.
+The fix format is designed so that adding a machine is data plus a detect
+script rather than a rewrite - see **Writing a fix** above, and please write
+the `danger` field from something you actually observed.
