@@ -1,0 +1,35 @@
+id: ec-buttons-dkms
+name: EC event FIFO poll, in-kernel via DKMS (buttons + sensors + lid)
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  The in-kernel counterpart to ec-buttons-poll. Same root cause: on some Chrome
+  EC convertibles the EC never delivers MKBP events after boot, so volume
+  buttons, the sensor FIFO and the lid angle all go silent (confirmed on Google
+  Nocturne / Pixel Slate).
+
+  This builds and installs a small out-of-tree kernel module, cros-ec-evpoll,
+  via DKMS. It calls the in-tree driver's own exported drain routine
+  (cros_ec_irq_thread) on a workqueue instead of waiting for an interrupt that
+  never fires - so EVERY existing MKBP consumer works again (buttons, the sensor
+  hub for auto-rotate, lid angle), not just volume. It is a standalone add-on:
+  it does not patch or replace cros_ec, and rebuilds automatically on kernel
+  updates.
+
+  This is the out-of-tree equivalent of kernel patch 9201 - the same fix without
+  rebuilding a whole kernel. Prefer this over the userspace ec-buttons-poll if
+  you want the full MKBP path (sensors/lid) back, not just the volume keys. Use
+  ONE of the two, never both.
+danger: |
+  Builds and loads a kernel module. A misbehaving module can destabilise the
+  system; this one only reads the EC FIFO and fires the existing notifier, and
+  reverts by removing the DKMS package and unloading. Requires kernel headers
+  and a toolchain (dkms, and clang/lld for a clang-built kernel) - apply checks
+  and tells you exactly what is missing.
+notes: |
+  Needs an installed kernel with headers (build/ tree + Module.symvers). A
+  custom kernel that shipped without headers cannot build it until they are
+  installed; the tool reports that rather than failing obscurely. Loads at boot
+  via /etc/modules-load.d. Affected-board list matches ec-buttons-poll.

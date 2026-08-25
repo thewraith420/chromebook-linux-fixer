@@ -1,0 +1,33 @@
+id: ec-buttons-poll
+name: Volume buttons via userspace EC poll (no kernel rebuild)
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  On some Chrome EC convertibles the EC never delivers MKBP events to the AP
+  after boot - the interrupt fires once at startup and never again, and the
+  ACPI notify path is dead too. The volume buttons go permanently silent
+  (confirmed on Google Nocturne / Pixel Slate; the same fault also silences the
+  sensor FIFO and lid angle, which the rotation daemon works around separately).
+
+  The synchronous EC command path still works, so this installs a small system
+  service that polls the EC event FIFO through /dev/cros_ec and re-injects the
+  volume keys through a uinput device. Applications and the desktop then see
+  ordinary KEY_VOLUMEUP / KEY_VOLUMEDOWN presses. No kernel changes, works on
+  any distro.
+
+  This is the userspace equivalent of the in-kernel poll (kernel patch 9201) -
+  the DKMS fix ec-buttons-dkms does the same thing inside the kernel for people
+  who prefer that. Use ONE of the two, never both.
+danger: |
+  Installs and enables a root system service that opens /dev/cros_ec and
+  /dev/uinput. The service is sandboxed to just those two devices. Revert
+  disables and removes it cleanly.
+
+  Do not run this alongside a kernel that already polls the EC FIFO (patch 9201,
+  or the ec-buttons-dkms fix): both would drain the same FIFO and race for
+  events. Detection refuses to offer it when the kernel is already polling.
+notes: |
+  Volume only, by design - the power button is left alone. The affected-board
+  list currently holds Google Nocturne; add confirmed boards to detect.sh.
