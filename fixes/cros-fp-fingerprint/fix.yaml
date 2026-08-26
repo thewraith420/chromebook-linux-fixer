@@ -1,0 +1,42 @@
+id: cros-fp-fingerprint
+name: Fingerprint reader in the power button (ChromeOS FPMCU)
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  Chromebooks with a fingerprint reader expose it as a Chrome EC subdevice at
+  /dev/cros_fp. The kernel side works out of the box - cros-ec-spi binds it and
+  the MCU answers - but no Linux userspace can drive it: libfprint has no
+  driver (the one public attempt is an abandoned skeleton with every method
+  commented out), and ChromeOS uses its own biod daemon instead.
+
+  GNOME decides whether to offer fingerprint unlock by asking fprintd over
+  D-Bus for devices and enrolled fingers. That check happens before PAM is ever
+  consulted, which is why replacing the PAM module alone does nothing.
+
+  This installs a small daemon that speaks fprintd's D-Bus API and drives the
+  MCU through rust-fp's cros_fp driver. GNOME, GDM and the lock screen then
+  work unmodified, because as far as they can tell they are talking to fprintd.
+
+  Includes two upstream fixes found while building this:
+    - crosec-rs computed template upload chunk *size* from the EC's response
+      limit but chunk *count* from its request limit. When those differ it
+      sends the wrong number of chunks, still flags the last one as commit, and
+      the MCU fails to decrypt a partial buffer - EC_RES_UNAVAILABLE. Template
+      upload never worked, so matching only ever succeeded immediately after
+      enrolment, when the template was already resident on the MCU.
+    - rust-fp's upload path retries transient Busy/Unavailable rather than
+      panicking on an unwrap.
+danger: |
+  Masks fprintd and takes over its D-Bus name, because only one process can own
+  it. Real fprintd has no driver for this sensor, so nothing is lost - but any
+  USB fingerprint reader you plug in later will stop being handled until you
+  revert this.
+
+  Fingerprint is an additional path GDM tries, never a replacement: pam_fprintd
+  appears only in /etc/pam.d/gdm-fingerprint, not in common-auth. If the daemon
+  is stopped, broken, or the scan fails, you get the password prompt. This
+  cannot lock you out.
+
+  Builds from source and needs a Rust toolchain (~300MB via rustup if absent).

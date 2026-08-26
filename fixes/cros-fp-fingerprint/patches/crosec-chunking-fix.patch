@@ -1,0 +1,43 @@
+diff --git a/crosec/Cargo.toml b/crosec/Cargo.toml
+index 02cd582..d0e7827 100644
+--- a/crosec/Cargo.toml
++++ b/crosec/Cargo.toml
+@@ -20,3 +20,9 @@ uom = "0.36.0"
+ 
+ [features]
+ clap = ["dep:clap"]
++
++# Building this as a path dependency removes cargo's --cap-lints, so warnings
++# that were capped as a git dependency become hard errors. This crate is
++# vendored only to carry a fix; do not fail its build on pre-existing lints.
++[lints.rust]
++dependency_on_unit_never_type_fallback = "allow"
+diff --git a/crosec/src/commands/fp_upload_template.rs b/crosec/src/commands/fp_upload_template.rs
+index 679ce4e..8c34361 100644
+--- a/crosec/src/commands/fp_upload_template.rs
++++ b/crosec/src/commands/fp_upload_template.rs
+@@ -33,12 +33,19 @@ pub fn fp_upload_template<File: AsRawFd>(
+     );
+     // TODO(b/78544921): removing 32 bits is a workaround for the MCU bug
+     // Idk what this bug is, but the ChromiumOS ectool removes 4 bytes, so we should too
++    // This is an upload: the data travels host -> EC, so the limit that applies
++    // is the request (input) size, not the response (output) size.
++    //
++    // Previously the chunk *size* came from max_ec_output_size() while the chunk
++    // *count* came from max_ec_input_size(). Those are derived from different
++    // fields (max_response_packet_size vs max_request_packet_size), so whenever
++    // they differ the loop sends the wrong number of chunks - and still sets
++    // FP_TEMPLATE_COMMIT on the last one. The EC then decrypts a partially
++    // written buffer, fails, and answers EC_RES_UNAVAILABLE. Observed on
++    // nocturne_fp: every upload failed that way.
+     let max_chunk_size =
+-        protocol_info.max_ec_output_size() - offset_of!(EcParamsFpTemplateWithoutData, data) - 4;
+-    let number_of_chunks = template
+-        .buffer()
+-        .len()
+-        .div_ceil(protocol_info.max_ec_input_size());
++        protocol_info.max_ec_input_size() - offset_of!(EcParamsFpTemplateWithoutData, data) - 4;
++    let number_of_chunks = template.buffer().len().div_ceil(max_chunk_size);
+     for chunk_index in 0..number_of_chunks {
+         ec_command_with_dynamic_output_size(
+             CrosEcCmd::FpTemplate,
