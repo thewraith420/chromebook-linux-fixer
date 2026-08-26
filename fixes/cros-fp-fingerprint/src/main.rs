@@ -252,6 +252,14 @@ impl Device {
                 return;
             }
 
+            // Tell the caller which finger we are waiting for. This is what
+            // produces the visible "Place your finger on the fingerprint
+            // reader" prompt: pam_fprintd builds that message when it receives
+            // VerifyFingerSelected, combining the finger name with the device's
+            // scan-type. Without it the sensor is armed but nothing on screen
+            // says so, and an admin dialog looks like it simply hung.
+            let _ = Device::verify_finger_selected(&ctxt, &finger_name).await;
+
             // A real finger on a real sensor does not match every time: skin is
             // dry, the angle is off, the touch is brief. Reporting a single
             // no-match as final drops the user straight to a password prompt,
