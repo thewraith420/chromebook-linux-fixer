@@ -21,23 +21,47 @@ case "$MODE" in
     *) echo "unknown mode: $MODE"; exit 2 ;;
 esac
 
-command -v meson >/dev/null || { echo "meson not installed"; exit 1; }
-command -v ninja >/dev/null || { echo "ninja not installed"; exit 1; }
 [ -f "$PATCH" ] || { echo "missing $PATCH"; exit 1; }
+
+# --- build dependencies ------------------------------------------------------
+# A fresh install has none of the toolchain. Install it explicitly (an explicit
+# list does not depend on deb-src being enabled, which it usually is not).
+if ! command -v meson >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 \
+   || ! command -v curl >/dev/null 2>&1; then
+    echo "Installing build tools + libcamera build dependencies..."
+    $SUDO apt-get update
+    $SUDO apt-get install -y --no-install-recommends \
+        meson ninja-build build-essential pkg-config git curl ca-certificates \
+        python3-yaml python3-jinja2 python3-ply \
+        libgnutls28-dev openssl libssl-dev libyaml-dev libudev-dev \
+        libevent-dev libdrm-dev
+fi
 
 mkdir -p "$WORK"
 cd "$WORK"
 
-# --- source ------------------------------------------------------------------
+# --- source (pinned v0.7.0 - reproducible on any future Ubuntu) --------------
+# The patch is written against libcamera 0.7.0. Rather than fetch "whatever
+# libcamera the distro ships now" (which the patch would fail against once
+# Ubuntu moves past 0.7.0), pull the exact pristine 0.7.0 tree, archived as a
+# release asset and checksum-verified. Cache it in $WORK so re-runs skip the
+# download. To reproduce fully offline, drop $LC_TARBALL into $WORK yourself.
+LC_TARBALL="libcamera_0.7.0.orig.tar.gz"
+LC_URL="https://github.com/thewraith420/chromebook-linux-fixer/releases/download/libcamera-src-0.7.0/$LC_TARBALL"
+LC_SHA256="ebd90a3aa2ca87a39323ffb7a4f5bbf72090b43a2431133759620b63e982db87"
 if [ ! -d libcamera-src ]; then
-    echo "Fetching libcamera source matching the installed package..."
-    rm -rf src-tmp && mkdir src-tmp && cd src-tmp
-    apt-get source libcamera >/dev/null 2>&1 \
-        || { echo "apt-get source libcamera failed. Enable deb-src, then:"; \
-             echo "  $SUDO apt build-dep libcamera"; exit 1; }
-    DIR=$(find . -maxdepth 1 -type d -name 'libcamera-*' | head -1)
+    if [ ! -f "$LC_TARBALL" ]; then
+        echo "Fetching pinned libcamera 0.7.0 source..."
+        curl -fSL -o "$LC_TARBALL" "$LC_URL" \
+            || { echo "download failed; place $LC_TARBALL in $WORK and re-run"; exit 1; }
+    fi
+    echo "$LC_SHA256  $LC_TARBALL" | sha256sum -c - \
+        || { echo "source checksum mismatch - refusing to build"; exit 1; }
+    rm -rf src-tmp && mkdir src-tmp
+    tar -xzf "$LC_TARBALL" -C src-tmp
+    DIR=$(find src-tmp -maxdepth 1 -type d -name 'libcamera*' | head -1)
     [ -n "$DIR" ] || { echo "could not find unpacked source"; exit 1; }
-    cd "$WORK" && mv "src-tmp/$DIR" libcamera-src && rm -rf src-tmp
+    mv "$DIR" libcamera-src && rm -rf src-tmp
 fi
 cd libcamera-src
 
