@@ -34,6 +34,9 @@ use zbus::{connection::Builder, fdo, interface};
 use async_std::sync::Mutex;
 
 const MANAGER_PATH: &str = "/net/reactivated/Fprint/Manager";
+/// How many touches to allow before falling back to a password.
+const MAX_VERIFY_ATTEMPTS: u32 = 5;
+
 const DEVICE_PATH: &str = "/net/reactivated/Fprint/Device/0";
 
 /// fprintd reports enrolment progress in stages. The MCU reports a percentage,
@@ -248,40 +251,61 @@ impl Device {
                 let _ = Device::verify_status(&ctxt, "verify-no-match", true).await;
                 return;
             }
-            let result = {
-                let mut d = driver.lock().await;
-                // Stringify the error here: match_templates yields a
-                // Box<dyn Error>, which is not Send, and holding it across the
-                // signal await below would make this whole task non-Send.
-                d.match_templates(&data).await.map_err(|e| format!("{e:?}"))
-            };
-            let status = match result {
-                Ok(MatchOutput::Match(m)) => {
-                    info!("matched template #{} ({:?})", m.index, labels.get(m.index));
-                    // The MCU refines a template on a successful match; keeping
-                    // it is what makes recognition improve with use.
-                    if let Some(updated) = m.updated_template {
-                        if let Some(label) = labels.get(m.index) {
-                            if let Ok(mut map) = templates::load(&user) {
-                                map.insert(label.clone(), updated);
-                                if let Err(e) = templates::save(&user, &map) {
-                                    warn!("could not save updated template: {e}");
+
+            // A real finger on a real sensor does not match every time: skin is
+            // dry, the angle is off, the touch is brief. Reporting a single
+            // no-match as final drops the user straight to a password prompt,
+            // which on a tablet means the on-screen keyboard - the very thing
+            // fingerprint unlock exists to avoid.
+            //
+            // fprintd's protocol already distinguishes these: done=false keeps
+            // the prompt live for another touch, done=true ends the attempt. So
+            // report the first few failures as retryable and only give up after
+            // MAX_VERIFY_ATTEMPTS.
+            for attempt in 1..=MAX_VERIFY_ATTEMPTS {
+                let result = {
+                    let mut d = driver.lock().await;
+                    // Stringify the error here: match_templates yields a
+                    // Box<dyn Error>, which is not Send, and holding it across
+                    // the signal await below would make this task non-Send.
+                    d.match_templates(&data).await.map_err(|e| format!("{e:?}"))
+                };
+
+                match result {
+                    Ok(MatchOutput::Match(m)) => {
+                        info!("matched template #{} ({:?})", m.index, labels.get(m.index));
+                        // The MCU refines a template on a successful match;
+                        // keeping it is what makes recognition improve with use.
+                        if let Some(updated) = m.updated_template {
+                            if let Some(label) = labels.get(m.index) {
+                                if let Ok(mut map) = templates::load(&user) {
+                                    map.insert(label.clone(), updated);
+                                    if let Err(e) = templates::save(&user, &map) {
+                                        warn!("could not save updated template: {e}");
+                                    }
                                 }
                             }
                         }
+                        let _ = Device::verify_status(&ctxt, "verify-match", true).await;
+                        return;
                     }
-                    "verify-match"
+                    Ok(MatchOutput::NoMatch(reason)) => {
+                        info!("no match on attempt {attempt}/{MAX_VERIFY_ATTEMPTS} ({reason:?})");
+                    }
+                    Err(e) => {
+                        error!("match failed on attempt {attempt}: {e:?}");
+                    }
                 }
-                Ok(MatchOutput::NoMatch(reason)) => {
-                    info!("no match ({reason:?})");
-                    "verify-no-match"
+
+                if attempt < MAX_VERIFY_ATTEMPTS {
+                    // done=false: "that did not work, try again", and the
+                    // caller keeps the prompt up rather than falling back.
+                    let _ = Device::verify_status(&ctxt, "verify-retry-scan", false).await;
+                } else {
+                    info!("giving up after {MAX_VERIFY_ATTEMPTS} attempts");
+                    let _ = Device::verify_status(&ctxt, "verify-no-match", true).await;
                 }
-                Err(e) => {
-                    error!("match failed: {e:?}");
-                    "verify-retry-scan"
-                }
-            };
-            let _ = Device::verify_status(&ctxt, status, true).await;
+            }
         });
         self.running = Some(handle);
         Ok(())
