@@ -25,12 +25,20 @@ echo "  $APPS/org.chromebookfixer.Gui.desktop"
 command -v update-desktop-database >/dev/null && \
     update-desktop-database "$APPS" 2>/dev/null || true
 
-case ":$PATH:" in
-    *":$BIN:"*) ;;
-    *) echo
-       echo "NOTE: $BIN is not on your PATH. Add it to your shell profile:"
-       echo "      export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
-esac
-
 echo
-echo "Installed. Start with:  chromebook-fixer status"
+case ":$PATH:" in
+    *":$BIN:"*)
+        echo "Installed. Start with:  chromebook-fixer status" ;;
+    *)
+        # Common on a fresh Ubuntu: ~/.local/bin was not on PATH at login.
+        # The stock ~/.profile adds it once the directory exists (which it now
+        # does), so a future login self-heals - but this shell needs a nudge.
+        echo "Installed to $BIN, which is not on this shell's PATH yet."
+        echo "Your next login adds it automatically (the directory now exists)."
+        echo "To use it in this shell right now:"
+        echo
+        echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+        echo "    chromebook-fixer status"
+        echo
+        echo "or just open a new terminal and run:  chromebook-fixer status" ;;
+esac

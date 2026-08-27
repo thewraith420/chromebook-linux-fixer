@@ -69,6 +69,10 @@ cd chromebook-linux-fixer
 chromebook-fixer status
 ```
 
+`install.sh` prints the exact next step if `~/.local/bin` isn't on your `PATH`
+yet (common on a fresh Ubuntu) — in short, open a new terminal, or run
+`export PATH="$HOME/.local/bin:$PATH"`, then re-run the command.
+
 No root is needed to install. The tool asks for privileges per fix, only when a
 fix actually needs them, so there is no reason to install it as root. Running
 from a clone without installing works too - every path is resolved relative to
