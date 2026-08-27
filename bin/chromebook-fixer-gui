@@ -108,20 +108,33 @@ class FixRow(Adw.ExpanderRow):
 
 
 class Window(Adw.ApplicationWindow):
+    """
+    Two levels: a list of categories, then the fixes inside one.
+
+    A single page of twenty expander rows is a wall of hardware jargon, and it
+    reads as intimidating rather than useful. People arrive because one thing is
+    broken, so the first screen is just "which part of the machine?", and each
+    category carries a count of what needs attention so nothing hides behind a
+    heading.
+    """
+
     def __init__(self, app):
         super().__init__(application=app, title="Chromebook Fixer",
                          default_width=760, default_height=720)
         self.machine = Machine.detect()
-        self.rows = []
+        self.rows = []              # every FixRow, for refreshing
+        self.category_rows = {}     # category key -> (row, fixes)
 
-        toolbar = Adw.ToolbarView()
-        header = Adw.HeaderBar()
-        refresh = Gtk.Button(icon_name="view-refresh-symbolic",
-                             tooltip_text="Re-check everything")
-        refresh.connect("clicked", lambda _b: self.refresh_all())
-        header.pack_start(refresh)
-        toolbar.add_top_bar(header)
+        self.nav = Adw.NavigationView()
+        self.nav.add(self._build_root())
+        self.toasts = Adw.ToastOverlay(child=self.nav)
+        self.set_content(self.toasts)
 
+        GLib.idle_add(self.refresh_all)
+
+    # -- level 1: the categories -------------------------------------------
+
+    def _build_root(self):
         page = Adw.PreferencesPage()
 
         info = Adw.PreferencesGroup(title="This machine")
@@ -135,43 +148,86 @@ class Window(Adw.ApplicationWindow):
             info.add(r)
         page.add(info)
 
-        # One group per category rather than a single list. Twenty rows of
-        # hardware jargon is a wall; someone opens this because one specific
-        # thing is broken, and grouping lets them go straight to it.
         applicable = [f for f in load_fixes() if f.matches(self.machine)]
-        first = True
+        group = Adw.PreferencesGroup(
+            title="Fixes",
+            description="Pick the part of the machine you want to look at. "
+                        "Nothing is changed until you press Apply.")
+
         for key, label in CATEGORIES.items():
-            group_fixes = [f for f in applicable if f.category == key]
-            if not group_fixes:
+            fixes = [f for f in applicable if f.category == key]
+            if not fixes:
                 continue
-            group = Adw.PreferencesGroup(title=label)
-            if first:
-                group.set_description(
-                    "Only fixes matching this hardware are shown. "
-                    "Nothing is changed until you press Apply.")
-                first = False
-            for fix in group_fixes:
-                row = FixRow(fix, self)
-                self.rows.append(row)
-                group.add(row)
-            page.add(group)
+            row = Adw.ActionRow(title=label, activatable=True)
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect("activated",
+                        lambda _r, k=key, l=label: self._open_category(k, l))
+            group.add(row)
+            self.category_rows[key] = (row, fixes)
+        page.add(group)
 
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        refresh = Gtk.Button(icon_name="view-refresh-symbolic",
+                             tooltip_text="Re-check everything")
+        refresh.connect("clicked", lambda _b: self.refresh_all())
+        header.pack_start(refresh)
+        toolbar.add_top_bar(header)
         toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
-        self.toasts = Adw.ToastOverlay(child=toolbar)
-        self.set_content(self.toasts)
 
-        GLib.idle_add(self.refresh_all)
+        return Adw.NavigationPage(child=toolbar, title="Chromebook Fixer")
+
+    # -- level 2: one category ---------------------------------------------
+
+    def _open_category(self, key, label):
+        _row, fixes = self.category_rows[key]
+
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup()
+        for fix in fixes:
+            row = FixRow(fix, self)
+            self.rows.append(row)
+            group.add(row)
+            row.refresh()
+        page.add(group)
+
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(Adw.HeaderBar())     # back button is automatic
+        toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
+        self.nav.push(Adw.NavigationPage(child=toolbar, title=label))
+
+    # -- summaries ----------------------------------------------------------
+
+    def refresh_all(self):
+        # Rows on any pushed page.
+        for row in self.rows:
+            row.refresh()
+
+        # Category summaries. Counting here rather than on the row keeps the
+        # status check in one place, and means a category cannot look calm
+        # while something inside it needs attention.
+        for key, (row, fixes) in self.category_rows.items():
+            needed = applied = 0
+            for fix in fixes:
+                state, _ = fix.status()
+                if state == "needed":
+                    needed += 1
+                elif state == "applied":
+                    applied += 1
+            total = len(fixes)
+            if needed:
+                row.set_subtitle(f"{needed} of {total} need attention")
+                row.remove_css_class("dim-label")
+            else:
+                row.set_subtitle(f"{total} fix{'es' if total != 1 else ''}, "
+                                 f"{applied} applied")
+        return False
 
     @staticmethod
     def _row(title, subtitle):
         r = Adw.ActionRow(title=title, subtitle=subtitle)
         r.set_subtitle_lines(0)
         return r
-
-    def refresh_all(self):
-        for row in self.rows:
-            row.refresh()
-        return False
 
     # -- running a fix ----------------------------------------------------
 
