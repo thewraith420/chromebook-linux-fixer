@@ -214,12 +214,47 @@ fixes/<id>/              one directory per fix
 kernel/                  kernel patches (shipped, not applied)
 ```
 
+## What is covered
+
+19 fixes at present, grouped by the part of the machine they concern:
+
+**Camera** — `camera-follow-rotation`, `camera-orientation`, `ipu3-camera`, `ipu3-imgu-grableak`, `ipu3-imgu-iommu`, `ipu3-vcm-focus`
+
+**Screen, brightness and rotation** — `accelerometer-orientation`, `backlight-permissions`, `display-autorotate`, `panel-brightness-dpcd`, `tablet-mode-switch`
+
+**Audio** — `audio-avs-dsp`
+
+**Buttons and sensors** — `ec-buttons-dkms`, `ec-buttons-poll`
+
+**Login and security** — `cros-fp-fingerprint`
+
+**Android (Waydroid)** — `waydroid-lxc-hook`, `waydroid-netfilter`, `waydroid-usb`
+
+**System and performance** — `zram-swap`
+
+Everything here was developed against a **Google Nocturne (Pixel Slate)**, which
+is the only machine it has been tested on. Fixes gate themselves on hardware
+detection, so running this on another Chromebook should be uneventful - most
+will simply report "not needed" - but that is reasoning, not evidence.
+
+Several of these are not available anywhere else as far as I can tell: the IPU3
+camera stack, and a bridge that makes the fingerprint reader in the power button
+work with GNOME's lock screen. Others are one-line settings that took a long
+time to find.
+
 ## Status
 
-Early. Working CLI, hardware matching, and a first set of fixes ported from
-hand-rolled scripts. Contributions for other models are welcome — the fix
-format is designed so that adding a model is data plus a detect script, not a
-rewrite.
+Usable. CLI and GTK4 front end, hardware matching, category navigation, and a
+verified install path. The fix format is designed so that adding a machine is
+data plus a detect script rather than a rewrite.
+
+Two things worth knowing before you rely on it:
+
+- **It is tested on one machine.** Detection is written to be conservative, but
+  your hardware will differ in ways I have never seen.
+- **Some fixes touch things that can hard lock a machine.** That is documented
+  per fix in the `danger` field, written from what actually happened rather
+  than from generic caution.
 
 ## Licence
 
