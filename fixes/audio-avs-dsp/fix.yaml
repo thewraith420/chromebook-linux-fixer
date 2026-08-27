@@ -25,3 +25,9 @@ notes: |
   Requires a reboot to take effect. dsp_driver values: 1=legacy, 3=SOF, 4=AVS.
   Confirmed on Google Nocturne (Pixel Slate, MAX98373). The audio-controller
   PCI-ID allow-list in detect.sh can be extended as boards are verified.
+
+  If this machine already has working audio via an edit to
+  /etc/modprobe.d/alsa-base.conf, be aware that file is a package conffile:
+  the next alsa-base upgrade will prompt about the conflict, and choosing the
+  package version silently removes the option and kills audio again. Moving
+  the line into this fix's own file avoids that trap.
