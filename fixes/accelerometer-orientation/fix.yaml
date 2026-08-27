@@ -1,0 +1,25 @@
+id: accelerometer-orientation
+name: Accelerometer polling and mounting orientation
+risk: low
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  Two problems with the Chrome EC accelerometer, both of which break rotation
+  in different ways.
+
+  First, delivery. iio-sensor-proxy prefers to wait on an IIO trigger rather
+  than poll, but on these machines the EC's asynchronous event delivery does
+  not work - the same defect that leaves the volume buttons dead. Readings
+  never arrive and the screen never rotates. Marking the device as
+  iio-poll-accel makes the proxy read it on a timer instead.
+
+  Second, mounting. The sensor is soldered in whatever orientation suited the
+  board, and the kernel does not know which way that is. Without a mount matrix
+  the axes are wrong and the screen rotates the wrong way, or upside down. The
+  matrix is per-model and cannot be guessed, so this ships a table of known
+  machines and applies nothing where the model is unknown.
+danger: |
+  The mount matrix is model-specific. Applying another machine's matrix gives
+  confidently wrong rotation, which is worse than none. Unknown models get the
+  polling fix only, and the rotation direction should be checked by hand.

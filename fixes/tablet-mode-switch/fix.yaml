@@ -1,0 +1,30 @@
+id: tablet-mode-switch
+name: Automatic screen rotation via a synthetic tablet-mode switch
+risk: low
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  GNOME will only rotate the screen automatically when it believes the machine
+  is in tablet mode, and it decides that from an input device reporting
+  SW_TABLET_MODE. Convertibles and tablets that never report one - either
+  because the firmware does not expose it, or because the driver does not
+  translate it - get no auto-rotation at all, and no user-facing setting
+  changes that.
+
+  This creates a virtual input device via uinput that reports SW_TABLET_MODE=1
+  permanently. mutter then accepts the machine as a tablet and drives rotation
+  itself, natively, with no shell extension involved: the Mutter DisplayConfig
+  property PanelOrientationManaged flips to true.
+
+  This is the better answer where it works, because rotation is handled by the
+  compositor rather than by something racing it from outside. The
+  display-autorotate fix in this repository detects exactly this and steps back
+  to a supporting role when it sees mutter has taken over.
+danger: |
+  Asserts tablet mode permanently. On a convertible with a real keyboard this
+  is wrong: GNOME will keep the on-screen keyboard behaviour and rotation
+  enabled even when the lid is open in laptop posture. It suits tablets and
+  detachables whose keyboard is absent or already handled separately.
+
+  Needs /dev/uinput, which the service opens as root.

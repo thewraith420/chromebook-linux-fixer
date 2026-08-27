@@ -1,0 +1,22 @@
+id: backlight-permissions
+name: Screen brightness control without root
+risk: low
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  Brightness is set by writing to /sys/class/backlight/*/brightness, which is
+  root-owned. Desktops normally go through logind, which does the write on the
+  user's behalf - but where that path does not work, brightness keys and
+  sliders do nothing and only root can change the screen.
+
+  This grants the video group write access to the brightness attribute and adds
+  the invoking user to that group.
+
+  Deliberately not chmod 0666, which is the obvious fix and is world-writable:
+  it lets any local account, including service users with no business touching
+  the display, change the screen brightness. Group ownership limits it to
+  accounts that are meant to drive the display hardware.
+danger: |
+  Group membership only takes effect on a new login session, so brightness
+  control stays broken until you log out and back in.
