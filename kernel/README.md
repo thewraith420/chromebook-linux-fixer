@@ -22,33 +22,34 @@ The kernel fix is narrower — a per-device quirk changes IOMMU behaviour for on
 device rather than the whole system, and a DMI quirk makes every libcamera
 consumer work rather than just the one configured by hand.
 
-## Status
+## Where the patches live
 
-The patches themselves are **not yet included in this repository.** They were
-developed and are maintained on a separate kernel build machine, as commits
-against a `BobZKernel` tree:
+They are maintained on a separate kernel build machine, and published:
 
-- **9202** — `ipu3-imgu`: fix `pipe_mode` grab leak. `imgu_vb2_start_streaming()`
-  grabs the control, then returns 0 even when `imgu_s_stream()` failed, so
-  `imgu->streaming` stays false and the ungrab in the stop path never runs. The
-  device is then wedged for the rest of the session and reports `EBUSY`.
-- **9204** — `ipu3-imgu`: place the device in an IOMMU identity domain via a
-  per-device quirk, because the driver programs its MMU with raw physical
-  addresses and cannot work in a translated domain. Without this, streaming the
-  ImgU hard locks the machine. **This must be carried forever on any
-  mainline-derived kernel** — the equivalent upstream patch was *rejected*, so
-  mainline will not grow one. Ubuntu ships it as SAUCE, which is why stock
-  Ubuntu kernels need no quirk of their own. Full history, the upstream diff,
-  and the maintainer's objection:
-  [`ipu3-imgu-iommu-upstream-reference.md`](ipu3-imgu-iommu-upstream-reference.md).
-- DMI quirk exposing camera sensor rotation and front/back orientation for
-  machines whose firmware omits the ChromeOS SSDB table.
+**[nocturne-ipu3-camera](https://github.com/thewraith420/nocturne-ipu3-camera)**
+carries the camera-side kernel work as standalone patches, plus the
+libcamera changes and a write-up of how the IOMMU problem was found:
 
-To contribute them here, export as `git format-patch` output and drop them in
-this directory named after the fix id, e.g.
-`ipu3-imgu-iommu-passthrough.patch`. The detect scripts do not depend on the
-files being present — they test the running kernel's actual behaviour, which is
-the more reliable signal anyway.
+- `kernel/9202-ipu3-imgu-fix-pipe_mode-grab-leak.patch`
+- `kernel/9203-imx319-imx355-nocturne-sensor-orientation.patch`
+- `kernel/9204-iommu-vtd-ipu3-imgu-identity-domain.patch`
+- `userspace/libcamera-nocturne-ipu3.patch`
+
+**[BobZKernel](https://github.com/thewraith420/BobZKernel)**, branch
+`pixel-slate`, is the kernel build itself:
+
+- `patches/cachyos-7.1/9200-i915-pixel-slate-aux-backlight.patch`
+
+**Not yet published: 9201**, the EC event FIFO poll. It is in the built
+kernel - `/sys/module/cros_ec/parameters/ec_event_poll_ms` exists and its help
+text describes it as a fallback for when the EC event IRQ never fires - but the
+patch is not committed to either repository. It is what makes the volume
+buttons work on this hardware, and the reason `ec-buttons-poll` and
+`ec-buttons-dkms` in this repo exist for kernels that lack it.
+
+Note that the `pixel-slate` branch is not self-contained: the camera patches
+above are applied from elsewhere, so building that branch alone does not
+reproduce the running kernel.
 
 ## Detecting rather than assuming
 

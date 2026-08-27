@@ -6,6 +6,6 @@ Comment=Detect and apply hardware fixes for Chromebooks running Linux
 Exec=chromebook-fixer-gui
 Icon=preferences-system
 Terminal=false
-Categories=System;Settings;HardwareSettings;GTK;
+Categories=Settings;HardwareSettings;GTK;
 Keywords=chromebook;hardware;camera;fix;kernel;
 StartupNotify=true
