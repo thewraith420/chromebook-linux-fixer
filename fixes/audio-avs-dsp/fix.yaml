@@ -1,0 +1,27 @@
+id: audio-avs-dsp
+name: Speaker audio via the AVS DSP driver (Skylake/Kaby Lake Chromebooks)
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  On the Intel cAVS-1.5 generation of Chromebooks (Skylake through Gemini Lake),
+  the kernel's default audio-DSP driver selection often lands on SOF or the
+  legacy driver - neither of which has a working machine driver for these
+  boards' speaker amps (for example the MAX98373 on Google Nocturne / Pixel
+  Slate). The result is silent speakers even though the hardware is fine.
+
+  Forcing the Intel AVS driver (snd-intel-dspcfg dsp_driver=4) loads the AVS
+  machine drivers instead, and audio works. The whole fix is one modprobe.d
+  line plus an initramfs rebuild.
+danger: |
+  Forcing a DSP driver is only correct for the cAVS-1.5 platforms. Detection
+  refuses to offer this unless the audio controller is one of those AND there is
+  no working analog output already - so it never overrides a setup where sound
+  works. Applied to the wrong hardware it could break working audio, which is
+  why the detect is symptom-gated. Revert removes the option and rebuilds the
+  initramfs.
+notes: |
+  Requires a reboot to take effect. dsp_driver values: 1=legacy, 3=SOF, 4=AVS.
+  Confirmed on Google Nocturne (Pixel Slate, MAX98373). The audio-controller
+  PCI-ID allow-list in detect.sh can be extended as boards are verified.
