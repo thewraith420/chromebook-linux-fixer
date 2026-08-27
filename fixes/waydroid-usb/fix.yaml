@@ -1,4 +1,5 @@
 id: waydroid-usb
+category: android
 name: USB device passthrough into Waydroid
 risk: low
 reverts_cleanly: true

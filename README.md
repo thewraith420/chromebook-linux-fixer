@@ -134,10 +134,29 @@ Write `verify` to check **the thing your fix installs** — your file, your
 marker, your parameter — not the symptom being gone. Where the symptom can also
 vanish on its own, say so with exit 3.
 
+Fixes are grouped by category in both the CLI and the GUI. A flat list of
+twenty entries reads as a wall of hardware jargon, and people open this tool
+because one specific thing is broken - so `category` decides which heading a
+fix appears under:
+
+| category | heading |
+|---|---|
+| `camera` | Camera |
+| `display` | Screen, brightness and rotation |
+| `audio` | Audio |
+| `input` | Buttons and sensors |
+| `security` | Login and security |
+| `android` | Android (Waydroid) |
+| `system` | System and performance |
+
+Anything unrecognised falls under **Other**, which is a prompt to add a
+category rather than a place to leave things.
+
 `fix.yaml` declares metadata and, crucially, hazards:
 
 ```yaml
 id: some-fix
+category: camera            # decides the heading it appears under
 name: Human readable name
 risk: low | medium | high
 reverts_cleanly: true

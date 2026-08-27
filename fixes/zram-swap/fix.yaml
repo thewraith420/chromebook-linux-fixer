@@ -1,4 +1,5 @@
 id: zram-swap
+category: system
 name: Compressed RAM swap instead of swapping to eMMC
 risk: low
 reverts_cleanly: true

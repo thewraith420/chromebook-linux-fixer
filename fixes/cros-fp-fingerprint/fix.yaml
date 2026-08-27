@@ -1,4 +1,5 @@
 id: cros-fp-fingerprint
+category: security
 name: Fingerprint reader in the power button (ChromeOS FPMCU)
 risk: medium
 reverts_cleanly: true

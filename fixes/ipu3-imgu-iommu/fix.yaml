@@ -1,4 +1,5 @@
 id: ipu3-imgu-iommu
+category: camera
 name: IPU3 ImgU IOMMU passthrough (prevents hard lockup)
 risk: high
 reverts_cleanly: true

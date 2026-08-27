@@ -1,4 +1,5 @@
 id: audio-avs-dsp
+category: audio
 name: Speaker audio via the AVS DSP driver (Skylake/Kaby Lake Chromebooks)
 risk: medium
 reverts_cleanly: true

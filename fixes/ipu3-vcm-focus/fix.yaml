@@ -1,4 +1,5 @@
 id: ipu3-vcm-focus
+category: camera
 name: Rear camera focus default (ak7375 VCM)
 risk: low
 danger: |

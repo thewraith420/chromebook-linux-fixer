@@ -1,4 +1,5 @@
 id: ipu3-camera
+category: camera
 name: IPU3 cameras (imx319/imx355) in libcamera
 risk: medium
 reverts_cleanly: true

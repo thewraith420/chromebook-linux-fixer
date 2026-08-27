@@ -1,4 +1,5 @@
 id: waydroid-netfilter
+category: android
 name: Waydroid network start on kernels without legacy iptables
 risk: low
 danger: |

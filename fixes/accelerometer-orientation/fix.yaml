@@ -1,4 +1,5 @@
 id: accelerometer-orientation
+category: display
 name: Accelerometer polling and mounting orientation
 risk: low
 reverts_cleanly: true

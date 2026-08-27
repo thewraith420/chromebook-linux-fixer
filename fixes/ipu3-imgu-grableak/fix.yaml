@@ -1,4 +1,5 @@
 id: ipu3-imgu-grableak
+category: camera
 name: ipu3-imgu pipe_mode grab leak (out-of-tree module)
 risk: medium
 reverts_cleanly: true

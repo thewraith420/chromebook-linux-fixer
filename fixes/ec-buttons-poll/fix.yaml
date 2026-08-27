@@ -1,4 +1,5 @@
 id: ec-buttons-poll
+category: input
 name: Volume buttons via userspace EC poll (no kernel rebuild)
 risk: medium
 reverts_cleanly: true

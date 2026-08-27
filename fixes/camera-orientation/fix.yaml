@@ -1,4 +1,5 @@
 id: camera-orientation
+category: camera
 name: Camera image rotation and front/back labelling
 risk: low
 reverts_cleanly: true

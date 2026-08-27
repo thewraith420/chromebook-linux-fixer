@@ -1,4 +1,5 @@
 id: tablet-mode-switch
+category: display
 name: Automatic screen rotation via a synthetic tablet-mode switch
 risk: low
 reverts_cleanly: true

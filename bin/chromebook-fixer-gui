@@ -21,7 +21,7 @@ from gi.repository import Adw, GLib, Gtk, Pango  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "lib"))
-from registry import Machine, load_fixes  # noqa: E402
+from registry import CATEGORIES, Machine, load_fixes  # noqa: E402
 
 RISK_STYLE = {"low": "success", "medium": "warning", "high": "error"}
 STATE_TEXT = {
@@ -135,16 +135,26 @@ class Window(Adw.ApplicationWindow):
             info.add(r)
         page.add(info)
 
-        self.group = Adw.PreferencesGroup(
-            title="Fixes",
-            description="Only fixes matching this hardware are shown. Nothing "
-                        "is changed until you press Apply.")
-        for fix in load_fixes():
-            if fix.matches(self.machine):
+        # One group per category rather than a single list. Twenty rows of
+        # hardware jargon is a wall; someone opens this because one specific
+        # thing is broken, and grouping lets them go straight to it.
+        applicable = [f for f in load_fixes() if f.matches(self.machine)]
+        first = True
+        for key, label in CATEGORIES.items():
+            group_fixes = [f for f in applicable if f.category == key]
+            if not group_fixes:
+                continue
+            group = Adw.PreferencesGroup(title=label)
+            if first:
+                group.set_description(
+                    "Only fixes matching this hardware are shown. "
+                    "Nothing is changed until you press Apply.")
+                first = False
+            for fix in group_fixes:
                 row = FixRow(fix, self)
                 self.rows.append(row)
-                self.group.add(row)
-        page.add(self.group)
+                group.add(row)
+            page.add(group)
 
         toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
         self.toasts = Adw.ToastOverlay(child=toolbar)

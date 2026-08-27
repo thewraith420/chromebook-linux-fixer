@@ -1,4 +1,5 @@
 id: waydroid-lxc-hook
+category: android
 name: Waydroid container restart after any stop
 risk: low
 reverts_cleanly: true

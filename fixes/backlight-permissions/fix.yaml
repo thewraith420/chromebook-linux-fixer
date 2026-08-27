@@ -1,4 +1,5 @@
 id: backlight-permissions
+category: display
 name: Screen brightness control without root
 risk: low
 reverts_cleanly: true

@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from registry import Machine, load_fixes, STATE_DIR  # noqa: E402
+from registry import CATEGORIES, Machine, load_fixes, STATE_DIR  # noqa: E402
 
 DISCLAIMER = """\
 chromebook-fixer makes LOW-LEVEL CHANGES to this system.
@@ -77,6 +77,20 @@ def colour(enabled):
     return (lambda s, c: f"{c}{s}{RESET}") if enabled else (lambda s, c: s)
 
 
+def by_category(fixes):
+    """
+    Group fixes for display, in CATEGORIES order.
+
+    A flat list of twenty items reads as a wall of jargon, and someone opens
+    this tool because one specific thing is broken. Grouping lets them skip
+    straight to the part of the machine they care about.
+    """
+    for key, label in CATEGORIES.items():
+        group = [f for f in fixes if f.category == key]
+        if group:
+            yield label, group
+
+
 def cmd_status(args, machine, fixes, c):
     print(f"{c(machine.describe(), BOLD)}")
     print(f"  kernel {machine.kernel}")
@@ -92,16 +106,19 @@ def cmd_status(args, machine, fixes, c):
 
     other = len(fixes) - len(applicable)
     needed = 0
-    for fix in applicable:
-        state, detail = fix.status()
-        col, label = STATE_STYLE[state]
-        if state == "needed":
-            needed += 1
-        state_label = f"{label:>10}"
-        print(f"  {c(state_label, col)}  {fix.id:<28} {fix.name}")
-        if detail and state in ("needed", "unknown"):
-            for line in detail.splitlines()[:2]:
-                print(f"              {c(line, DIM)}")
+    for label, group in by_category(applicable):
+        print(c(f"{label}", BOLD))
+        for fix in group:
+            state, detail = fix.status()
+            col, lab = STATE_STYLE[state]
+            if state == "needed":
+                needed += 1
+            state_label = f"{lab:>10}"
+            print(f"  {c(state_label, col)}  {fix.id:<28} {fix.name}")
+            if detail and state in ("needed", "unknown"):
+                for line in detail.splitlines()[:2]:
+                    print(f"              {c(line, DIM)}")
+        print()
 
     print()
     if needed:
@@ -115,14 +132,17 @@ def cmd_status(args, machine, fixes, c):
 
 
 def cmd_list(args, machine, fixes, c):
-    for fix in fixes:
-        mark = " " if fix.matches(machine) else c("·", DIM)
-        risk = {"low": GREEN, "medium": YELLOW, "high": RED}.get(fix.risk, DIM)
-        risk_label = f"{fix.risk:<7}"
-        print(f"{mark} {fix.id:<28} {c(risk_label, risk)} {fix.name}")
-        if args.verbose and fix.description:
-            for line in fix.description.splitlines():
-                print(f"      {c(line, DIM)}")
+    for label, group in by_category(fixes):
+        print(c(f"{label}", BOLD))
+        for fix in group:
+            mark = " " if fix.matches(machine) else c("·", DIM)
+            risk = {"low": GREEN, "medium": YELLOW, "high": RED}.get(fix.risk, DIM)
+            risk_label = f"{fix.risk:<7}"
+            print(f"{mark} {fix.id:<28} {c(risk_label, risk)} {fix.name}")
+            if args.verbose and fix.description:
+                for line in fix.description.splitlines():
+                    print(f"      {c(line, DIM)}")
+        print()
     print()
     print(c("· = not applicable to this machine", DIM))
     return 0

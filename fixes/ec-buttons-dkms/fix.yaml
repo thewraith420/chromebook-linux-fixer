@@ -1,4 +1,5 @@
 id: ec-buttons-dkms
+category: input
 name: EC event FIFO poll, in-kernel via DKMS (buttons + sensors + lid)
 risk: medium
 reverts_cleanly: true

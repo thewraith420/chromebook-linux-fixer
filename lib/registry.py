@@ -32,6 +32,21 @@ FIXES_DIR = REPO / "fixes"
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME",
                                 Path.home() / ".local/state")) / "chromebook-fixer"
 
+# Ordered by how likely someone is to be looking for it, not alphabetically:
+# a person opens this tool because something specific is broken, and the
+# categories they reach for most should be the ones they see first.
+CATEGORIES = {
+    "camera":   "Camera",
+    "display":  "Screen, brightness and rotation",
+    "audio":    "Audio",
+    "input":    "Buttons and sensors",
+    "security": "Login and security",
+    "android":  "Android (Waydroid)",
+    "system":   "System and performance",
+    "other":    "Other",
+}
+
+
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 
@@ -87,6 +102,9 @@ class Fix:
     path: Path
     name: str
     description: str = ""
+    # Which part of the machine this is about, for grouping in the UI.
+    # Keys come from CATEGORIES; anything unrecognised falls back to "other".
+    category: str = "other"
     risk: str = "medium"
     applies_to: dict = field(default_factory=dict)
     needs_root: bool = False
@@ -108,6 +126,7 @@ class Fix:
             path=path,
             name=meta.get("name", path.name),
             description=meta.get("description", "").strip(),
+            category=meta.get("category", "other"),
             risk=meta.get("risk", "medium"),
             applies_to=meta.get("applies_to") or {},
             needs_root=bool(meta.get("needs_root", False)),

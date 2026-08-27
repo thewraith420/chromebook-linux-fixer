@@ -1,4 +1,5 @@
 id: display-autorotate
+category: display
 name: Automatic screen rotation from the accelerometer
 risk: low
 reverts_cleanly: true

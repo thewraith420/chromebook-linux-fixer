@@ -1,4 +1,5 @@
 id: panel-brightness-dpcd
+category: display
 name: Screen brightness control on i915 panels
 risk: medium
 reverts_cleanly: true
