@@ -24,32 +24,43 @@ consumer work rather than just the one configured by hand.
 
 ## Where the patches live
 
-They are maintained on a separate kernel build machine, and published:
+They are maintained on a separate kernel build machine and published in
+**[BobZKernel](https://github.com/thewraith420/BobZKernel)**, branch
+`pixel-slate`, under `patches/cachyos-7.1/`:
+
+| patch | what it does |
+|---|---|
+| `9200-i915-pixel-slate-aux-backlight.patch` | backlight over DPCD/AUX |
+| `9201-cros-ec-poll-event-fifo-fallback.patch` | polls the EC event FIFO when its IRQ never fires |
+| `9202-ipu3-imgu-fix-pipe_mode-grab-leak.patch` | releases a control the ImgU driver leaks on a failed start |
+| `9203-imx319-imx355-nocturne-sensor-orientation.patch` | reports sensor mounting rotation and front/back |
+| `9204-iommu-vtd-ipu3-imgu-identity-domain.patch` | puts the ImgU in an IOMMU identity domain |
 
 **[nocturne-ipu3-camera](https://github.com/thewraith420/nocturne-ipu3-camera)**
-carries the camera-side kernel work as standalone patches, plus the
-libcamera changes and a write-up of how the IOMMU problem was found:
+carries the camera ones again as standalone patches, alongside the libcamera
+changes and a write-up of how the IOMMU problem was found.
 
-- `kernel/9202-ipu3-imgu-fix-pipe_mode-grab-leak.patch`
-- `kernel/9203-imx319-imx355-nocturne-sensor-orientation.patch`
-- `kernel/9204-iommu-vtd-ipu3-imgu-identity-domain.patch`
-- `userspace/libcamera-nocturne-ipu3.patch`
+**9204 is load-bearing and permanent.** The staging `ipu3-imgu` driver programs
+its MMU with raw physical addresses, so in a translated domain the machine hard
+locks on the first DMA - no panic, nothing in the logs. The equivalent upstream
+patch was *rejected* (see
+[`ipu3-imgu-iommu-upstream-reference.md`](ipu3-imgu-iommu-upstream-reference.md)),
+so mainline will never grow one and this must survive every rebase.
 
-**[BobZKernel](https://github.com/thewraith420/BobZKernel)**, branch
-`pixel-slate`, is the kernel build itself:
+Stock Ubuntu kernels are unaffected: they carry a SAUCE quirk that does the same
+job, which is why this fix reports "not needed" there.
 
-- `patches/cachyos-7.1/9200-i915-pixel-slate-aux-backlight.patch`
+## Why 9201 is not offered as a fix here
 
-**Not yet published: 9201**, the EC event FIFO poll. It is in the built
-kernel - `/sys/module/cros_ec/parameters/ec_event_poll_ms` exists and its help
-text describes it as a fallback for when the EC event IRQ never fires - but the
-patch is not committed to either repository. It is what makes the volume
-buttons work on this hardware, and the reason `ec-buttons-poll` and
-`ec-buttons-dkms` in this repo exist for kernels that lack it.
+The fixes in this repository deliberately avoid requiring a kernel rebuild.
+Where a kernel patch is the tidier answer, the fix ships the userspace or
+out-of-tree equivalent instead:
 
-Note that the `pixel-slate` branch is not self-contained: the camera patches
-above are applied from elsewhere, so building that branch alone does not
-reproduce the running kernel.
+- `ec-buttons-poll` polls the EC from userspace - no kernel changes at all.
+- `ec-buttons-dkms` builds the same logic as an out-of-tree module.
+
+Both do 9201's job on a kernel that lacks it. The kernel patch is better where
+you already build your own kernel; these exist so you do not have to.
 
 ## Detecting rather than assuming
 
