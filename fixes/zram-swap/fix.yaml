@@ -1,0 +1,35 @@
+id: zram-swap
+name: Compressed RAM swap instead of swapping to eMMC
+risk: low
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  Chromebooks pair modest RAM with eMMC storage, which is the worst combination
+  for swapping: eMMC is slow, especially at the small random writes swap
+  produces, and its flash has limited write endurance and cannot be replaced.
+
+  zram keeps swap in RAM, compressed. Under pressure the machine slows down
+  rather than crawling, and no pages are written to flash at all. It costs
+  nothing when unused, since an idle zram device holds no memory.
+
+  Uses systemd-zram-generator rather than a hand-rolled script. Getting this
+  right means loading the zram module, sizing the device, formatting it, and
+  enabling it as swap in the correct order at boot - which is exactly what
+  hand-rolled versions get wrong, usually by assuming /sys/block/zram0 exists
+  before the module is loaded.
+
+  Chooses lz4 rather than zstd. Chromebook CPUs are low-power and thermally
+  limited, and compression sits directly in the page-fault path: lz4 is several
+  times faster for a modestly worse ratio, which is the right trade when the
+  alternative is stalling a 1.3GHz core.
+
+  zram is given a higher priority than any disk swap, so it absorbs pressure
+  first and a swap file, if present, remains as overflow.
+danger: |
+  Compressed swap lives in RAM, so it is not a substitute for having enough of
+  it - a machine that swaps constantly will still be slow, just without wearing
+  the flash.
+
+  If a hibernate setup depends on a disk swap device, leave that in place: you
+  cannot hibernate into zram. This fix does not remove existing swap.
