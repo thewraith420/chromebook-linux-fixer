@@ -6,6 +6,8 @@ SUDO="${FIXER_SUDO:-sudo}"
 $SUDO systemctl disable --now fprintd-shim.service 2>/dev/null || true
 $SUDO rm -f /etc/systemd/system/fprintd-shim.service
 $SUDO rm -f /usr/local/libexec/fprintd-shim
+$SUDO rm -f /usr/lib/systemd/system-sleep/chromebook-fp-wake
+$SUDO rm -f /run/chromebook-fp-wake.pid
 $SUDO systemctl unmask fprintd.service 2>/dev/null || true
 $SUDO systemctl daemon-reload
 

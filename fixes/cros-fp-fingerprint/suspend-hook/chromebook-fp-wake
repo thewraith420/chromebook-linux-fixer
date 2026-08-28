@@ -1,0 +1,81 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# systemd-sleep hook: arm the fingerprint sensor before suspend, so a touch
+# while asleep can wake the machine.
+#
+# The sensor's own ACPI/kernel wakeup attributes are already enabled on this
+# hardware (confirmed: /proc/acpi/wakeup CRFP=S3 *enabled, and the SPI
+# device's own power/wakeup=enabled) - but nothing is scanning during
+# suspend unless the sensor is explicitly put into Match mode first. GNOME's
+# lock screen only arms it while its own unlock dialog is actively waiting,
+# and releases it once that finishes - it does not stay armed through a
+# whole suspend.
+#
+# Verified on hardware before this was written: manually arming Match mode
+# (fprintd-verify, left running) immediately before a manual suspend, then
+# touching the sensor once asleep, woke the machine. This hook automates
+# exactly that.
+#
+# What is NOT yet confirmed: whether a finger already resting on the sensor
+# at wake counts as a fresh touch for GNOME's own post-resume lock-screen
+# verify, or whether it needs to be lifted and pressed again. If the machine
+# wakes but stays locked, try lifting and re-touching once the screen is back.
+set -u
+
+LOG_TAG=chromebook-fp-wake
+PIDFILE=/run/chromebook-fp-wake.pid
+
+log() { logger -t "$LOG_TAG" "$1"; }
+
+graphical_user() {
+    # Single-seat assumption: the one active graphical session on this
+    # machine. Written this way rather than hardcoding a name so the same
+    # hook works for any single-user Chromebook running this fix.
+    local id
+    for id in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+        local type state
+        type=$(loginctl show-session "$id" -p Type --value 2>/dev/null)
+        state=$(loginctl show-session "$id" -p State --value 2>/dev/null)
+        if [ "$state" = "active" ] && { [ "$type" = "wayland" ] || [ "$type" = "x11" ]; }; then
+            loginctl show-session "$id" -p Name --value 2>/dev/null
+            return 0
+        fi
+    done
+}
+
+case "$1/$2" in
+    pre/suspend)
+        [ -e /dev/cros_fp ] || exit 0
+        systemctl is-active --quiet fprintd-shim.service || { log "shim not running, nothing to arm"; exit 0; }
+
+        user=$(graphical_user)
+        [ -n "$user" ] || { log "no active graphical session found; not arming"; exit 0; }
+
+        # Backgrounded and detached: this hook must return quickly, and the
+        # verify call blocks until it gets a result - which, if nobody
+        # touches the sensor, is never, until the post hook kills it.
+        setsid fprintd-verify "$user" >/var/log/chromebook-fp-wake.log 2>&1 &
+        echo $! > "$PIDFILE"
+        disown
+        log "armed match mode for $user (pid $!) before suspend"
+
+        # Give the D-Bus round trip (spawn, connect, Claim, VerifyStart) a
+        # moment to actually land before suspend proceeds underneath it.
+        sleep 0.3
+        ;;
+
+    post/suspend)
+        if [ -f "$PIDFILE" ]; then
+            pid=$(cat "$PIDFILE")
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null
+                log "killed the still-running pre-suspend verify (pid $pid); shim releases the claim on disconnect"
+            else
+                log "pre-suspend verify already finished by resume (matched, or failed) - nothing to clean up"
+            fi
+            rm -f "$PIDFILE"
+        fi
+        ;;
+esac
+
+exit 0

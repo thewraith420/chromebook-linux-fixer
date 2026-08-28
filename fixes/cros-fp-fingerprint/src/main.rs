@@ -21,6 +21,7 @@
 mod templates;
 
 use futures::future::join_all;
+use futures_util::StreamExt;
 use log::{error, info, warn};
 use rust_fp::drivers::get_drivers;
 use rust_fp::fingerprint_driver::{
@@ -68,6 +69,9 @@ struct Device {
     driver: Driver,
     /// Who called Claim. fprintd is per-user, and the template store is too.
     claimed: Option<String>,
+    /// The claiming client's unique bus name, so a crash or kill can be
+    /// told apart from a normal Release call. See the watcher in main().
+    claimed_by: Option<String>,
     /// The in-flight verify or enrol, if any.
     ///
     /// The driver blocks waiting for a finger that may never arrive, holding
@@ -180,12 +184,15 @@ impl Device {
         }
         info!("Claim by {user}");
         self.claimed = Some(user);
+        self.claimed_by = header.sender().map(|s| s.to_string());
         Ok(())
     }
 
     async fn release(&mut self) -> fdo::Result<()> {
         info!("Release");
         self.claimed = None;
+        self.claimed_by = None;
+        self.cancel_running().await;
         Ok(())
     }
 
@@ -437,6 +444,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Device {
                 driver,
                 claimed: None,
+                claimed_by: None,
                 running: None,
             },
         )?
@@ -444,6 +452,53 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
 
     info!("owning net.reactivated.Fprint - GNOME will ask us about fingerprints now");
+
+    // If the client holding the claim dies without calling Release - crashes,
+    // gets killed, or the machine suspends out from under it - the device
+    // would otherwise stay claimed forever, and every later Claim (including
+    // GNOME's own, at the very next lock screen) would be refused. Watch for
+    // its bus name vanishing and release on its behalf.
+    {
+        let conn = _conn.clone();
+        async_std::task::spawn(async move {
+            let dbus = match zbus::fdo::DBusProxy::new(&conn).await {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("could not watch for client disconnects: {e}");
+                    return;
+                }
+            };
+            let Ok(mut changes) = dbus.receive_name_owner_changed().await else {
+                warn!("could not subscribe to NameOwnerChanged");
+                return;
+            };
+            while let Some(signal) = changes.next().await {
+                let Ok(args) = signal.args() else { continue };
+                // zbus wraps this as Optional<UniqueName>, which Derefs to
+                // Option<UniqueName>: None means the name lost its last owner,
+                // which is what "vanished" means here.
+                if args.new_owner().is_some() {
+                    continue;
+                }
+                let name = args.name().to_string();
+                let Ok(iface) = conn.object_server().interface::<_, Device>(DEVICE_PATH).await
+                else {
+                    continue;
+                };
+                let mut dev = iface.get_mut().await;
+                if dev.claimed_by.as_deref() == Some(name.as_str()) {
+                    warn!(
+                        "client holding the claim ({}) disconnected without releasing; releasing for it",
+                        dev.claimed.clone().unwrap_or_default()
+                    );
+                    dev.claimed = None;
+                    dev.claimed_by = None;
+                    dev.cancel_running().await;
+                }
+            }
+        });
+    }
+
     std::future::pending::<()>().await;
     Ok(())
 }

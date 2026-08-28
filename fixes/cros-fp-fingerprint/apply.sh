@@ -97,9 +97,29 @@ if ! systemctl is-active --quiet fprintd-shim.service; then
     exit 1
 fi
 
+# -- wake-from-suspend on a touch -------------------------------------------
+#
+# The sensor's own ACPI/kernel wakeup attributes are already enabled on this
+# hardware, but GNOME only arms the sensor while its own unlock dialog is
+# actively waiting - it does not stay armed through a whole suspend. This
+# hook arms it right before suspend and cleans up right after, so a touch
+# while asleep can wake the machine. It relies on the disconnect-cleanup
+# above: the hook kills its own armed verify process on resume, and the
+# shim releases the claim when that connection drops, so GNOME's own
+# lock-screen verify is never left blocked behind it.
+$SUDO install -m755 "$FIX_DIR/suspend-hook/chromebook-fp-wake" \
+    /usr/lib/systemd/system-sleep/chromebook-fp-wake
+echo "installed the wake-on-touch suspend hook"
+
 echo
 echo "running. Enrol a finger with:"
 echo "    fprintd-enroll -f right-index-finger \$USER"
 echo "or from Settings > System > Users > Fingerprint Login."
 echo
 echo "Then test:  fprintd-verify \$USER"
+echo
+echo "To test wake-from-suspend: suspend the machine, wait for it to actually"
+echo "sleep, then touch the sensor. If it wakes but stays locked, lift your"
+echo "finger and touch again once - whether a still-resting finger counts as"
+echo "a fresh touch for the lock screen's own verify is hardware-dependent"
+echo "and has not been established beyond this one machine."

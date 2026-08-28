@@ -29,6 +29,26 @@ description: |
       enrolment, when the template was already resident on the MCU.
     - rust-fp's upload path retries transient Busy/Unavailable rather than
       panicking on an unwrap.
+
+  Two more additions on top of the working sensor:
+
+    - The daemon now watches for its caller's D-Bus connection disconnecting
+      without an explicit Release, and releases the claim on its behalf. A
+      client that crashes, gets killed, or otherwise vanishes mid-verify would
+      otherwise leave the sensor claimed forever, refusing every later Claim -
+      including GNOME's own, at the very next lock screen.
+    - A systemd-sleep hook arms the sensor in Match mode just before suspend
+      and cleans up just after, so a touch while asleep wakes the machine -
+      the sensor's own ACPI and kernel wakeup attributes are already enabled
+      on this hardware, but nothing scans for a touch during suspend unless
+      something explicitly arms it first. Confirmed working: the machine
+      wakes on a touch, and GNOME's own post-resume lock-screen verify then
+      matches again roughly a second later, which in practice reads as one
+      continuous touch-and-unlock. Whether a finger already resting on the
+      sensor at wake counts as a fresh touch for that second verify, or needs
+      to be lifted and pressed again, has only been observed on one machine.
+    - rust-fp's upload path retries transient Busy/Unavailable rather than
+      panicking on an unwrap.
 danger: |
   Masks fprintd and takes over its D-Bus name, because only one process can own
   it. Real fprintd has no driver for this sensor, so nothing is lost - but any
@@ -41,3 +61,8 @@ danger: |
   cannot lock you out.
 
   Builds from source and needs a Rust toolchain (~300MB via rustup if absent).
+
+  The suspend hook runs as root on every suspend, unconditionally arming the
+  sensor for whichever user has the active graphical session. It only arms
+  Match mode against that user's own enrolled templates and cleans up on
+  resume; it does not change who can authenticate as whom.
