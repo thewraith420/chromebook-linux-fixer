@@ -80,20 +80,29 @@ def find_loopback():
 
 
 class CameraRotator:
-    def __init__(self, width, height, loopback):
+    def __init__(self, width, height, loopback, camera=None, rotate=True,
+                 always_on=False):
         self.system_bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         self.sensor = Gio.DBusProxy.new_sync(
             self.system_bus, Gio.DBusProxyFlags.NONE, None,
             SENSOR_NAME, SENSOR_PATH, SENSOR_NAME, None)
 
-        if not self.sensor.get_cached_property("HasAccelerometer"):
+        if rotate and not self.sensor.get_cached_property("HasAccelerometer"):
             log("no accelerometer; nothing to follow")
             sys.exit(0)
 
         Gst.init(None)
         # videoconvert both sides: libcamerasrc and v4l2sink rarely agree on a
         # format, and videoflip only handles raw.
-        desc = (f"libcamerasrc ! "
+        src = "libcamerasrc"
+        if camera:
+            # libcamera ids are ACPI paths like \_SB_.PCI0.I2C3.CAM0.
+            # gst_parse_launch treats backslash as an escape inside a quoted
+            # property value and silently eats it, so the camera is then looked
+            # up as _SB_.PCI0.I2C3.CAM0 and not found. Double them.
+            escaped = camera.replace("\\", "\\\\")
+            src = f'libcamerasrc camera-name="{escaped}"'
+        desc = (f"{src} ! "
                 f"video/x-raw,width={width},height={height} ! "
                 f"videoconvert ! videoflip name=flip ! videoconvert ! "
                 f"video/x-raw,format=YUY2 ! "
@@ -106,15 +115,23 @@ class CameraRotator:
         bus.add_signal_watch()
         bus.connect("message::error", self.on_error)
 
-        self.sensor.call_sync("ClaimAccelerometer", None,
-                              Gio.DBusCallFlags.NONE, -1, None)
-        self.sensor.connect("g-properties-changed", self.on_orientation)
+        self.rotate = rotate
+        if rotate:
+            self.sensor.call_sync("ClaimAccelerometer", None,
+                                  Gio.DBusCallFlags.NONE, -1, None)
+            self.sensor.connect("g-properties-changed", self.on_orientation)
+        else:
+            log("rotation disabled; publishing the sensor's own orientation")
 
         self.device = loopback
         self.streaming = False
         self.idle_polls = 0
-        GLib.timeout_add_seconds(POLL_SECONDS, self.poll_consumers)
-        log(f"ready on {loopback}; the sensor opens when something reads it")
+        if always_on:
+            self.start_stream(set())
+            log(f"streaming continuously on {loopback}")
+        else:
+            GLib.timeout_add_seconds(POLL_SECONDS, self.poll_consumers)
+            log(f"ready on {loopback}; the sensor opens when something reads it")
 
     def on_error(self, _bus, message):
         err, debug = message.parse_error()
@@ -193,6 +210,8 @@ class CameraRotator:
             self.apply_current()
 
     def apply_current(self):
+        if not self.rotate:
+            return
         prop = self.sensor.get_cached_property("AccelerometerOrientation")
         if prop is None:
             return
@@ -209,6 +228,8 @@ class CameraRotator:
 
     def stop(self):
         self.pipeline.set_state(Gst.State.NULL)
+        if not self.rotate:
+            return
         try:
             self.sensor.call_sync("ReleaseAccelerometer", None,
                                   Gio.DBusCallFlags.NONE, -1, None)
@@ -222,6 +243,20 @@ def main():
     ap.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     ap.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
     ap.add_argument("--device", help="v4l2loopback node to publish into")
+    ap.add_argument("--camera", default=None,
+                    help="libcamera camera id to read from (default: the first). "
+                         "Use 'cam -l' to list them.")
+    ap.add_argument("--always-on", action="store_true",
+                    help="stream continuously instead of waiting for a reader. "
+                         "v4l2loopback rejects VIDIOC_STREAMON until a producer "
+                         "is attached, so a consumer that streams the instant it "
+                         "opens the device - Android's camera HAL does - fails "
+                         "before on-demand detection can react. Costs the privacy "
+                         "LED and a core while running.")
+    ap.add_argument("--no-rotate", action="store_true",
+                    help="do not follow the accelerometer. Android applies its "
+                         "own rotation from sensor metadata, so a rotating feed "
+                         "fights it rather than helping.")
     args = ap.parse_args()
 
     loopback = args.device or find_loopback()
@@ -233,7 +268,9 @@ def main():
         return 1
 
     try:
-        rotator = CameraRotator(args.width, args.height, loopback)
+        rotator = CameraRotator(args.width, args.height, loopback,
+                                camera=args.camera, rotate=not args.no_rotate,
+                                always_on=args.always_on)
     except GLib.Error as err:
         log(f"startup failed: {err.message}")
         return 1
