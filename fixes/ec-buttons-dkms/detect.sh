@@ -8,10 +8,18 @@ set -uo pipefail
 # Already loaded ours?
 [ -d /sys/module/cros_ec_evpoll ] && exit 1
 
-# Kernel already polls the FIFO in-tree (patch 9201)? Then this is redundant.
+# Kernel already polls the FIFO in-tree (patch 9201)? Then this is redundant -
+# but only if those events have a consumer. cros_ec_keyb binds to GOOG0007, and
+# firmware on this board can report that device absent (kernel patch 9207 forces
+# it back), so a polling kernel with a hidden GOOG0007 delivers events to nobody
+# and the buttons stay dead. Defer to the kernel only when it is actually
+# working, or when we cannot tell.
 POLL=/sys/module/cros_ec/parameters/ec_event_poll_ms
 if [ -r "$POLL" ] && [ "$(cat "$POLL" 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null; then
-    exit 1
+    "$FIXER_REPO/lib/ec-buttons.sh" goog0007
+    [ $? -eq 0 ] || exit 1
+    echo "kernel is polling the EC FIFO, but GOOG0007 is hidden by firmware so"
+    echo "cros_ec_keyb never bound - nothing consumes those events"
 fi
 
 # The userspace alternative (ec-buttons-poll) already covers it?

@@ -7,9 +7,21 @@ set -uo pipefail
 
 # If the kernel is already draining the EC event FIFO (patch 9201, or the DKMS
 # fix), userspace must NOT also drain it - the two would race. Stand down.
+#
+# Unless nothing is listening. Draining the FIFO only produces key presses if
+# cros_ec_keyb is bound to GOOG0007, and on this board firmware can report that
+# device absent (fixed in-kernel by patch 9207). A polling kernel with a hidden
+# GOOG0007 has healthy delivery and silent buttons, and standing down there
+# reports "not needed" at someone whose volume keys do nothing. Only defer to
+# the kernel when its events have a consumer - or when we cannot tell, since
+# racing a working EC is the worse mistake.
 POLL=/sys/module/cros_ec/parameters/ec_event_poll_ms
 if [ -r "$POLL" ] && [ "$(cat "$POLL" 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null; then
-    exit 1
+    "$FIXER_REPO/lib/ec-buttons.sh" goog0007
+    [ $? -eq 0 ] || exit 1
+    echo "kernel is polling the EC FIFO, but GOOG0007 is hidden by firmware so"
+    echo "cros_ec_keyb never bound - the events reach no one (kernel patch 9207"
+    echo "fixes this properly; this fix injects the keys from userspace instead)"
 fi
 
 # Already running ours?
