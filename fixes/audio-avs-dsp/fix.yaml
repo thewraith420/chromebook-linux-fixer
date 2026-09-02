@@ -13,9 +13,11 @@ description: |
   Pixel Slate). The result is silent speakers even though the hardware is fine.
 
   Forcing the Intel AVS driver (snd-intel-dspcfg dsp_driver=4) loads the AVS
-  machine drivers instead, and audio works. Two companion options go with it:
-  the shipped firmware does not match the version the driver expects, and the
-  ALSA UCM profiles for these boards are written against the old card names.
+  machine drivers instead, and audio works. ignore_fw_version=1 goes with it,
+  for boards whose shipped firmware version the driver would otherwise refuse.
+  The companion obsolete_card_names=1 is deliberately left off: it exists to
+  match UCM profiles this fix does not install, and setting it alone renames
+  the cards out from under a working setup.
 
   Gemini Lake is deliberately NOT covered. It is a SOF platform - the kernel
   has SND_SOC_SOF_GEMINILAKE and no AVS machine driver for it - so forcing AVS

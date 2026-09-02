@@ -43,12 +43,20 @@ echo "Writes $CONF and rebuilds the initramfs; a reboot is required after."
 $SUDO tee "$CONF" >/dev/null <<'CONF'
 # Written by chromebook-fixer (audio-avs-dsp).
 options snd-intel-dspcfg dsp_driver=4
-# The AVS firmware shipped for these boards does not match the version the
-# driver expects, and the driver refuses to load it without this.
+# Some of these boards ship AVS firmware whose version does not match what
+# the driver expects, and it refuses to load without this. Where the version
+# already matches, this does nothing.
 options snd-soc-avs ignore_fw_version=1
-# Keep the pre-rename card names, which the ALSA UCM profiles for these
-# boards are written against.
-options snd-soc-avs obsolete_card_names=1
+# Deliberately NOT setting obsolete_card_names=1 here, even though
+# chromebook-linux-audio does. That option restores the pre-rename card
+# names because the alsa-ucm-conf-cros UCM profiles are written against
+# them - and this fix does not install those profiles. Setting it without
+# them renames the cards out from under whatever PipeWire and UCM have
+# already matched on, which on a working machine is a regression with no
+# upside. Verified on the reference Slate: audio works with
+# obsolete_card_names=N and no cros UCM installed. If you add those
+# profiles, add this option with them:
+#options snd-soc-avs obsolete_card_names=1
 CONF
 
 if [ "$DISABLE_SPEAKERS" = "1" ] && [ -e "$TPLG" ]; then
