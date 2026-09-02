@@ -5,12 +5,18 @@ set -euo pipefail
 # "sudo -A" under the GUI, which has no tty to prompt on.
 SUDO="${FIXER_SUDO:-sudo}"
 
-# v4l2loopback is an out-of-tree module, so it must be buildable for the kernel
-# that is actually running - not merely for some installed kernel. DKMS will
-# happily build for every kernel it has headers for and silently skip the one
-# in use, which then fails at modprobe with a confusing "module not found".
+# v4l2loopback is not always out-of-tree. The BobZKernel pixel-slate branch
+# vendors it (patch 9205, CONFIG_V4L2LOOPBACK=m) and some distros ship it, in
+# which case there is nothing to build and no reason to want a toolchain or
+# kernel headers. Demanding them anyway refuses the whole fix on a self-built
+# kernel with no headers package - for a module that is already installed and
+# loadable. That combination is not hypothetical: it is what the reference
+# machine runs, and 9205 exists partly because DKMS had already silently
+# skipped that kernel for want of a build/ tree.
 RUNNING=$(uname -r)
-if ! "$FIXER_REPO/lib/dkms-support.sh" --kernel "$RUNNING" 2>/dev/null; then
+if modinfo v4l2loopback >/dev/null 2>&1; then
+    echo "v4l2loopback is already available for $RUNNING; nothing to build."
+elif ! "$FIXER_REPO/lib/dkms-support.sh" --kernel "$RUNNING" 2>/dev/null; then
     echo "Cannot build v4l2loopback for the running kernel ($RUNNING):"
     echo "  no headers at /lib/modules/$RUNNING/build"
     echo
@@ -28,9 +34,11 @@ if ! "$FIXER_REPO/lib/dkms-support.sh" --kernel "$RUNNING" 2>/dev/null; then
     echo
     echo "Nothing was changed."
     exit 1
-fi
-
-if ! modinfo v4l2loopback >/dev/null 2>&1; then
+else
+    # Absent, but buildable for the running kernel: DKMS will produce a module
+    # that actually loads. DKMS otherwise happily builds for every kernel it
+    # has headers for and silently skips the one in use, which then fails at
+    # modprobe with a confusing "module not found".
     echo "Installing v4l2loopback (builds a kernel module via DKMS)..."
     $SUDO apt-get install -y v4l2loopback-dkms
 fi
