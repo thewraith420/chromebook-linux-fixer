@@ -9,8 +9,29 @@ if ! { [ -f "$CONF" ] && grep -q "dsp_driver=4" "$CONF"; }; then
     # rather than falling through silently: the state is right, but this fix is
     # not what is holding it up, and the conffile route breaks on the next
     # alsa-base upgrade.
-    if grep -rqsE "snd[-_]intel[-_]dspcfg[[:space:]].*dsp_driver=4" /etc/modprobe.d/ 2>/dev/null; then
-        echo "AVS is forced elsewhere in /etc/modprobe.d, not by this fix"
+    SRC=$(grep -rlsE "snd[-_]intel[-_]dspcfg[[:space:]].*dsp_driver=4" \
+          /etc/modprobe.d/ 2>/dev/null | head -1)
+    if [ -n "$SRC" ]; then
+        echo "AVS is forced by $SRC, not by this fix"
+        # Naming the file matters when it is a package conffile. dpkg replays
+        # the maintainer's version on upgrade and prompts about the conflict;
+        # accepting the package version - the default for an unattended
+        # upgrade - silently drops the option and the speakers go quiet again,
+        # months later, with nothing obviously connecting the two events.
+        # dpkg records every conffile it owns, one per package. Reading that
+        # list is instant and definitive; "dpkg --verify" with no package
+        # argument walks every package on the system instead, which is slow
+        # enough to look like it simply found nothing.
+        OWNER=$(grep -lF "$SRC" /var/lib/dpkg/info/*.conffiles 2>/dev/null | head -1)
+        if [ -n "$OWNER" ]; then
+            PKG=$(basename "$OWNER" .conffiles)
+            echo "WARNING: that file is a CONFFILE owned by the '$PKG' package."
+            echo "Upgrading $PKG prompts about the conflict, and taking the"
+            echo "package version drops the option and kills audio - months"
+            echo "later, with nothing obviously connecting the two events."
+            echo "Applying this fix with --force writes the same option to a"
+            echo "file no package owns, which survives the upgrade."
+        fi
         exit 3
     fi
     exit 1
