@@ -7,10 +7,19 @@ IMGU=/sys/bus/pci/devices/0000:00:05.0
 TYPE=$(cat "$IMGU/iommu_group/type" 2>/dev/null || echo none)
 case "$TYPE" in
     identity)
-        if "$FIXER_REPO/lib/kernel-cmdline.sh" active iommu=pt; then
-            echo "ImgU in identity domain via iommu=pt on the kernel cmdline"
-            exit 0
-        fi
+        "$FIXER_REPO/lib/kernel-cmdline.sh" active iommu=pt
+        case $? in
+            0) echo "ImgU in identity domain via iommu=pt on the kernel cmdline"
+               exit 0 ;;
+            # Exit 3 asserts that something OTHER than this fix produced the
+            # identity domain. That is a claim about causation, and with the
+            # running cmdline unreadable there is no evidence for it - the
+            # parameter may well be set. Defer to detect rather than credit a
+            # kernel quirk that may not exist.
+            2) echo "ImgU is in an identity domain, but /proc/cmdline is"
+               echo "unreadable, so what put it there cannot be determined"
+               exit 1 ;;
+        esac
         # Mainline carries a VT-d quirk that puts the integrated Intel IPU in a
         # passthrough domain at PCI enumeration, and some custom kernels carry a
         # per-device equivalent. Either way the hazard is gone and there is
