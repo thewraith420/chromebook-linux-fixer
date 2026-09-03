@@ -42,8 +42,6 @@ They are maintained on a separate kernel build machine and published in
 
 Read that last column before relying on any of these. 9208 has never been
 booted; its own commit message is honest about that, and so is this table.
-9207's commit message still says "not yet confirmed on real hardware", which
-was true when it was written and is now stale — it was confirmed afterwards.
 
 Two of these bear directly on fixes in this repository:
 
@@ -106,11 +104,47 @@ They interact in a way that is easy to misread:
   `/dev/cros_ec` and injects through uinput, never touching ACPI enumeration
   or `cros_ec_keyb`, so the buttons work and the underlying bug is invisible.
 
+### Why there is no userspace fix for GOOG0007, and why none is needed
+
+9201 has userspace and out-of-tree equivalents. 9207 does not, and cannot have
+a clean one — but the gap it leaves is already covered.
+
+The ACPI route does not work. `_STA` for this device lives at
+`\_SB_.PCI0.LPCB.EC0_.CREC.CKSC` (read straight out of
+`/sys/bus/acpi/devices/GOOG0007:00/path`, no `acpidump` needed). Injecting a
+supplementary SSDT via the initrd is the usual no-kernel-rebuild trick and the
+kernel supports it here — `CONFIG_ACPI_TABLE_UPGRADE=y`. It still fails:
+an SSDT can *add* namespace objects, not *replace* existing ones, and a table
+redefining a name that already exists is rejected rather than honoured. That
+`_STA` demonstrably exists — a device with no `_STA` defaults to present, so
+if there were none there would be no bug. Overriding it therefore means
+replacing the whole DSDT, which has to be redone after every firmware update
+and, on a machine whose default boot entry is a kexec picker, turns a
+decompile-recompile mistake into a machine that does not boot.
+
+`CONFIG_ACPI_CONFIGFS=m` allows loading a table at runtime, which would fit
+this repo's systemd-service pattern far better, but almost certainly too late:
+Linux does not re-walk the namespace or re-evaluate `_STA` for devices it has
+already skipped, so a correction after boot arrives after the decision it
+would change. Untested here, and not worth testing given the SSDT limitation
+above applies either way.
+
+**None of that matters, because `ec-buttons-poll` already covers this fault.**
+It reads `/dev/cros_ec` and injects through uinput, never touching ACPI
+enumeration or `cros_ec_keyb`, so it restores volume keys whichever of the two
+faults is present. It just has to be willing to offer itself — which is what
+the `cros-ec-keyb` binding check above is for. The kernel patch remains the
+better fix where you build your own kernel: it matches on the resolved HID and
+survives firmware reshuffling, where any namespace-path override would silently
+stop applying.
+
 Detecting the GOOG0007 fault has one trap worth writing down:
 `/sys/bus/acpi/devices/GOOG0007:00/status` is **not** usable. `status_show()`
 in `drivers/acpi/device_sysfs.c` evaluates `_STA` against firmware directly and
 never consults `acpi_device_override_status()`, so it reads the same raw `0`
-whether or not the running kernel carries 9207. Check whether the driver bound
+whether or not the running kernel carries 9207. This is not a theory: the
+reference Slate runs 9207, its volume buttons work, `cros-ec-keyb` is bound to
+`GOOG0007:00` — and that file still reads `0`. Check whether the driver bound
 instead — `/sys/bus/platform/drivers/cros-ec-keyb/GOOG0007:00` — which is what
 `lib/ec-buttons.sh` does.
 
