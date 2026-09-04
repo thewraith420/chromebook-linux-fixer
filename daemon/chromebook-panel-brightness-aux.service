@@ -1,0 +1,24 @@
+[Unit]
+Description=Chromebook eDP panel brightness over DPCD/AUX (mirrors sysfs backlight)
+Documentation=https://github.com/thewraith420/chromebook-linux-fixer
+# Pointless before the panel's AUX channel exists.
+ConditionPathExistsGlob=/dev/drm_dp_aux*
+
+[Service]
+Type=simple
+# apply.sh rewrites this to $FIXER_REPO/daemon/chromebook-panel-brightness-aux
+ExecStart=/usr/local/bin/chromebook-panel-brightness-aux
+Restart=on-failure
+RestartSec=2
+# It needs the DisplayPort AUX chardev (major 235, "aux" in /proc/devices)
+# and read access to /sys/class/backlight; nothing else.
+DevicePolicy=closed
+DeviceAllow=char-aux rw
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateNetwork=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

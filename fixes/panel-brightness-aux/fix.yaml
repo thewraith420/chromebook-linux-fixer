@@ -1,0 +1,45 @@
+id: panel-brightness-aux
+category: display
+name: Screen brightness on eDP panels the kernel cannot drive (userspace DPCD)
+risk: medium
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  On some Chromebook panels the brightness slider, the brightness keys and
+  /sys/class/backlight all look like they work - values are accepted and read
+  back correctly - while the panel itself never changes. i915 registers a
+  native backlight interface and drives a PWM path that is not connected on
+  this board; the panel expects brightness over the DPCD AUX channel instead.
+
+  The usual cmdline fix does not help on a stock kernel. Both forcing modes of
+  i915.enable_dpcd_backlight were tested on Google Nocturne with Ubuntu's
+  7.0.0-30-generic - 2 (force VESA) and 3 (force Intel) - and both were
+  accepted as parameters and both were completely inert. There is no ACPI
+  fallback either: this firmware implements no _BCL/_BCM/_BQC methods at all,
+  so acpi_backlight=video has nothing to register. Making the panel work in
+  kernel space needs a patched i915 (see kernel/README.md, patch 9200).
+
+  This fix takes the userspace route instead, so it works on a stock distro
+  kernel with no patching. A small service writes the panel's DPCD backlight
+  registers directly through /dev/drm_dp_aux*, following the sysfs backlight
+  interface the desktop already writes to - so the existing slider and
+  brightness keys start working with nothing new to learn.
+danger: |
+  Installs and enables a root system service that opens the DisplayPort AUX
+  chardev and writes the panel's brightness registers. The service is
+  sandboxed to that device class and nothing else. Revert disables and
+  removes it cleanly.
+
+  Do not run this on a kernel whose own DPCD backlight support already works
+  (a kernel carrying patch 9200, for instance): both would drive the same
+  registers. Apply refuses to install when it detects the kernel is already
+  driving them.
+
+  The service refuses to set a fully dark panel even if asked to, since a
+  black screen on a tablet with no external display is hard to recover from.
+notes: |
+  Confirmed on Google Nocturne (Pixel Slate), whose panel reports eDP 1.4 with
+  TCON backlight adjustment and AUX brightness set capability. Other boards
+  with the same symptom should work, but are not on the offered list until
+  someone confirms one - add them to detect.sh.

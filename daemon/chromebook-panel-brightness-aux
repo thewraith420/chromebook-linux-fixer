@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Drive an eDP panel's backlight over DPCD/AUX from userspace.
+
+On some Chromebook panels (confirmed: Google Nocturne / Pixel Slate) the
+brightness slider, the brightness keys and /sys/class/backlight all appear
+to work - values are accepted and read back - while the panel itself never
+changes. i915 registers a native backlight interface and drives a PWM path
+that is not wired to anything on this board; the panel expects its
+brightness over the DPCD AUX channel instead.
+
+i915.enable_dpcd_backlight= does not fix it on a stock kernel. Both
+documented forcing modes were tested on Nocturne with 7.0.0-30-generic:
+2 (force VESA interface) and 3 (force Intel interface). Both were accepted
+as parameters and both were inert - sysfs kept working, the panel kept
+ignoring it. There is no ACPI fallback either: this firmware implements no
+_BCL/_BCM/_BQC methods at all (coreboot on a Chromebook has no reason to,
+since ChromeOS drives the panel natively), so acpi_backlight=video has
+nothing to register.
+
+What does work is writing the panel's DPCD backlight registers directly
+through /dev/drm_dp_aux*, which needs no kernel patch and so works on a
+stock distro kernel. This daemon watches the (inert but still updated)
+sysfs backlight interface that the desktop already writes to, and mirrors
+every change onto DPCD - so the existing slider and brightness keys start
+working with nothing new for the user to learn.
+
+One non-obvious detail, learned the hard way: the two brightness bytes must
+be written as a SINGLE atomic 2-byte transaction. Two separate one-byte
+writes (what `dd bs=1 count=2` does) are silently accepted - dd reports
+success - and the register does not change. os.pwrite() of a 2-byte buffer
+is what actually lands.
+"""
+import os
+import sys
+import glob
+import time
+
+SYSFS_CANDIDATES = ("/sys/class/backlight/intel_backlight",)
+
+# eDP DPCD registers (see the eDP spec / include/drm/display/drm_dp.h)
+EDP_GENERAL_CAP_1 = 0x701       # bit 0: TCON backlight adjustment capable
+EDP_BACKLIGHT_ADJ_CAP = 0x702   # bit 0: brightness is 2 bytes, bit 1: AUX set
+EDP_DISPLAY_CONTROL = 0x720     # bit 0: backlight enable
+EDP_BACKLIGHT_MODE_SET = 0x721  # bits 0-1: brightness control mode
+EDP_BACKLIGHT_BRIGHTNESS = 0x722  # 16-bit, MSB first
+
+BL_MODE_MASK = 0x03
+BL_MODE_DPCD = 0x02             # brightness comes from 0x722/0x723
+BL_ENABLE = 0x01
+
+DPCD_MAX = 0xFFFF
+# Never drive the panel fully dark. A slider at 0 that blanks the screen
+# entirely is indistinguishable from a crash, and on a tablet there is no
+# external monitor to recover on. The desktop's own minimum is normally
+# above this anyway, so in practice this only catches pathological writes.
+DPCD_FLOOR = 0x0300
+
+POLL_INTERVAL = 0.1             # responsiveness of slider/keys
+REASSERT_EVERY = 20             # ~2s: re-check the panel kept our value
+
+
+def find_edp_aux():
+    """The AUX channel belonging to the internal panel.
+
+    Matched by the connector name rather than a fixed index: drm_dp_aux0 is
+    the eDP on this board but that ordering is not guaranteed anywhere.
+    """
+    for dev in sorted(glob.glob("/sys/class/drm_dp_aux_dev/drm_dp_aux*")):
+        target = os.path.realpath(dev)
+        if "-eDP-" in target:
+            return "/dev/" + os.path.basename(dev)
+    return None
+
+
+def find_sysfs_backlight():
+    for path in SYSFS_CANDIDATES:
+        if os.path.isdir(path):
+            return path
+    # Fall back to any raw backlight; better than giving up outright.
+    for path in sorted(glob.glob("/sys/class/backlight/*")):
+        return path
+    return None
+
+
+def read_int(path, default=None):
+    try:
+        with open(path) as fh:
+            return int(fh.read().strip())
+    except (OSError, ValueError):
+        return default
+
+
+class Panel:
+    def __init__(self, aux_path):
+        self.fd = os.open(aux_path, os.O_RDWR)
+
+    def read(self, addr, count=1):
+        return os.pread(self.fd, count, addr)
+
+    def write(self, addr, data):
+        # Must be one transaction - see the module docstring.
+        return os.pwrite(self.fd, data, addr)
+
+    def supports_aux_backlight(self):
+        try:
+            cap1 = self.read(EDP_GENERAL_CAP_1)[0]
+            adj = self.read(EDP_BACKLIGHT_ADJ_CAP)[0]
+        except OSError:
+            return False
+        return bool(cap1 & 0x01) and bool(adj & 0x02)
+
+    def ensure_dpcd_mode(self):
+        """Put the panel in DPCD brightness mode with the backlight on.
+
+        Read-modify-write: the other bits in these registers are not ours
+        (FRC enable, colour engine, ...) and clobbering them is a good way
+        to produce a very confusing bug.
+        """
+        try:
+            ctl = self.read(EDP_DISPLAY_CONTROL)[0]
+            if not ctl & BL_ENABLE:
+                self.write(EDP_DISPLAY_CONTROL, bytes([ctl | BL_ENABLE]))
+            mode = self.read(EDP_BACKLIGHT_MODE_SET)[0]
+            if (mode & BL_MODE_MASK) != BL_MODE_DPCD:
+                self.write(EDP_BACKLIGHT_MODE_SET,
+                           bytes([(mode & ~BL_MODE_MASK) | BL_MODE_DPCD]))
+        except OSError as exc:
+            print(f"warning: could not set DPCD backlight mode: {exc}",
+                  file=sys.stderr, flush=True)
+
+    def set_brightness(self, value):
+        value = max(DPCD_FLOOR, min(DPCD_MAX, value))
+        self.write(EDP_BACKLIGHT_BRIGHTNESS, bytes([value >> 8, value & 0xFF]))
+        return value
+
+    def get_brightness(self):
+        raw = self.read(EDP_BACKLIGHT_BRIGHTNESS, 2)
+        return (raw[0] << 8) | raw[1]
+
+
+def main():
+    aux = find_edp_aux()
+    if not aux:
+        print("no eDP AUX device found (no internal DisplayPort panel?)",
+              file=sys.stderr)
+        return 1
+
+    sysfs = find_sysfs_backlight()
+    if not sysfs:
+        print("no /sys/class/backlight interface to follow", file=sys.stderr)
+        return 1
+
+    bright_path = os.path.join(sysfs, "brightness")
+    max_raw = read_int(os.path.join(sysfs, "max_brightness"))
+    if not max_raw:
+        print(f"{sysfs} reports no usable max_brightness", file=sys.stderr)
+        return 1
+
+    try:
+        panel = Panel(aux)
+    except OSError as exc:
+        print(f"cannot open {aux}: {exc}", file=sys.stderr)
+        return 1
+
+    if not panel.supports_aux_backlight():
+        print(f"{aux}: panel does not advertise AUX backlight control",
+              file=sys.stderr)
+        return 1
+
+    print(f"following {bright_path} (0..{max_raw}) -> {aux} DPCD "
+          f"0x{EDP_BACKLIGHT_BRIGHTNESS:03x} (0..0x{DPCD_MAX:04x})", flush=True)
+
+    panel.ensure_dpcd_mode()
+
+    last_raw = None
+    last_written = None
+    tick = 0
+
+    while True:
+        raw = read_int(bright_path)
+        if raw is not None:
+            scaled = round(raw * DPCD_MAX / max_raw)
+            changed = raw != last_raw
+            # Periodically confirm the panel still holds what we set. A
+            # resume, a DPMS cycle or i915 touching the link can reset it,
+            # and the sysfs value alone would not tell us.
+            drifted = False
+            if not changed and tick % REASSERT_EVERY == 0 and last_written is not None:
+                try:
+                    drifted = panel.get_brightness() != last_written
+                except OSError:
+                    drifted = False
+            if changed or drifted:
+                try:
+                    last_written = panel.set_brightness(scaled)
+                    last_raw = raw
+                except OSError as exc:
+                    print(f"warning: brightness write failed: {exc}",
+                          file=sys.stderr, flush=True)
+        tick += 1
+        time.sleep(POLL_INTERVAL)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
