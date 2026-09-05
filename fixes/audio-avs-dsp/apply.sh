@@ -38,9 +38,15 @@ fi
 echo "Forcing the Intel AVS DSP driver (dsp_driver=4)."
 echo "Writes $CONF and rebuilds the initramfs; a reboot is required after."
 
-# Heredoc rather than a pipe: "echo x | $SUDO tee" runs sudo in a forked
-# subshell, which with no tty makes sudo re-prompt for every pipeline.
-$SUDO tee "$CONF" >/dev/null <<'CONF'
+# One escalation for all of it. Under the GUI $SUDO is pkexec, whose polkit
+# action is auth_admin rather than auth_admin_keep - there is no credential
+# cache, so every separate $SUDO is another authentication prompt. Four
+# prompts to apply one fix trains people to click through them.
+$SUDO bash -s -- "$CONF" "$TPLG" "$TPLG_BAK" "$DISABLE_SPEAKERS" <<'ROOT'
+set -euo pipefail
+CONF="$1"; TPLG="$2"; TPLG_BAK="$3"; DISABLE_SPEAKERS="$4"
+
+cat > "$CONF" <<'CONF_BODY'
 # Written by chromebook-fixer (audio-avs-dsp).
 options snd-intel-dspcfg dsp_driver=4
 # Some of these boards ship AVS firmware whose version does not match what
@@ -57,21 +63,22 @@ options snd-soc-avs ignore_fw_version=1
 # obsolete_card_names=N and no cros UCM installed. If you add those
 # profiles, add this option with them:
 #options snd-soc-avs obsolete_card_names=1
-CONF
+CONF_BODY
 
 if [ "$DISABLE_SPEAKERS" = "1" ] && [ -e "$TPLG" ]; then
     if [ -e "$TPLG_BAK" ]; then
-        # A previous apply already saved the original; the firmware package has
-        # since reinstated this one. Keep the first backup - it is the pristine
-        # copy - and drop the reinstated file.
-        $SUDO rm -f "$TPLG"
+        # A previous apply already saved the original; the firmware package
+        # has since reinstated this one. Keep the first backup - it is the
+        # pristine copy - and drop the reinstated file.
+        rm -f "$TPLG"
     else
-        $SUDO mv "$TPLG" "$TPLG_BAK"
+        mv "$TPLG" "$TPLG_BAK"
     fi
     echo "$(basename "$TPLG") moved aside; speakers stay silent until revert"
 fi
 
-$SUDO update-initramfs -u
+update-initramfs -u
+ROOT
 
 echo "Done. Reboot, then check Settings -> Sound (or 'pactl list short sinks')"
 echo "for a speaker/analog output. If it is still silent, revert this fix."
