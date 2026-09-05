@@ -106,8 +106,9 @@ They interact in a way that is easy to misread:
 
 ### Why there is no userspace fix for GOOG0007, and why none is needed
 
-9201 has userspace and out-of-tree equivalents. 9207 does not, and cannot have
-a clean one — but the gap it leaves is already covered.
+9201 has a userspace equivalent. 9207 cannot have one at all — no userspace
+change makes the ACPI core enumerate a device firmware calls absent. What
+follows is why the obvious attempts fail, and why the gap still closes.
 
 The ACPI route does not work. `_STA` for this device lives at
 `\_SB_.PCI0.LPCB.EC0_.CREC.CKSC` (read straight out of
@@ -129,14 +130,15 @@ already skipped, so a correction after boot arrives after the decision it
 would change. Untested here, and not worth testing given the SSDT limitation
 above applies either way.
 
-**None of that matters, because `ec-buttons-poll` already covers this fault.**
-It reads `/dev/cros_ec` and injects through uinput, never touching ACPI
-enumeration or `cros_ec_keyb`, so it restores volume keys whichever of the two
-faults is present. It just has to be willing to offer itself — which is what
-the `cros-ec-keyb` binding check above is for. The kernel patch remains the
-better fix where you build your own kernel: it matches on the resolved HID and
-survives firmware reshuffling, where any namespace-path override would silently
-stop applying.
+**The enumeration stays broken, and the buttons still work.** `ec-buttons-poll`
+reads `/dev/cros_ec` and injects through uinput, never touching ACPI
+enumeration or `cros_ec_keyb`, so it restores volume keys under either fault.
+It only has to be willing to offer itself, which is what the detection below
+is for. That is a symptom fix, not a cure: GOOG0007 is still hidden, nothing
+else that wants `cros_ec_keyb` gets it, and on a stock kernel that is the best
+available. The kernel patch remains the real answer where you build your own
+kernel — it matches on the resolved HID and survives firmware reshuffling,
+where any namespace-path override would silently stop applying.
 
 Detecting the GOOG0007 fault has one trap worth writing down:
 `/sys/bus/acpi/devices/GOOG0007:00/status` is **not** usable. `status_show()`
@@ -144,9 +146,22 @@ in `drivers/acpi/device_sysfs.c` evaluates `_STA` against firmware directly and
 never consults `acpi_device_override_status()`, so it reads the same raw `0`
 whether or not the running kernel carries 9207. This is not a theory: the
 reference Slate runs 9207, its volume buttons work, `cros-ec-keyb` is bound to
-`GOOG0007:00` — and that file still reads `0`. Check whether the driver bound
-instead — `/sys/bus/platform/drivers/cros-ec-keyb/GOOG0007:00` — which is what
-`lib/ec-buttons.sh` does.
+`GOOG0007:00` — and that file still reads `0`.
+
+Ask enumeration instead, which is what `lib/ec-buttons.sh` does. A bound
+driver — `/sys/bus/platform/drivers/cros-ec-keyb/GOOG0007:00` — proves the
+path works, but its absence proves little, because a modular `cros_ec_keyb`
+that never loaded looks identical to one that could not bind. So it falls back
+to `/sys/bus/acpi/devices/GOOG0007:00/physical_node`: the platform device the
+ACPI core creates only for a node it considers present. Absent means firmware
+hid it and no driver could ever have bound.
+
+That fallback is safe for the same reason `status` is not. `status_show()`
+calls `acpi_evaluate_integer(..., "_STA", ...)` and goes straight to firmware,
+while enumeration runs through `acpi_bus_get_status()`, which calls
+`acpi_device_override_status()` first and returns early when a quirk matches
+(`drivers/acpi/bus.c:100`). One path sees the kernel's override; the other
+never can.
 
 ## Why 9201 is not offered as a fix here
 
