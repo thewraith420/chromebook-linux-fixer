@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -254,6 +255,11 @@ def _has_terminal() -> bool:
     return True
 
 
+def _has_graphical_session() -> bool:
+    """Is there a desktop session that could show a polkit prompt?"""
+    return any(os.environ.get(v) for v in ("WAYLAND_DISPLAY", "DISPLAY"))
+
+
 def _find_askpass() -> str | None:
     existing = os.environ.get("SUDO_ASKPASS")
     if existing and Path(existing).exists():
@@ -273,14 +279,25 @@ def sudo_command() -> tuple[str, str | None]:
     In a real terminal plain `sudo` is the right answer: prompting on the tty
     is what the user expects, and forcing -A there would demand a graphical
     askpass helper for an ordinary CLI run, including over ssh.
+
+    With no terminal but a graphical session, pkexec comes first. It asks the
+    desktop's polkit agent, which authenticates however the machine is set up
+    to - on a Chromebook that means the fingerprint reader, where askpass can
+    only ever offer a password box to type into. It needs an agent to ask,
+    though, which is why this is gated on a graphical session rather than
+    tried unconditionally: without one pkexec falls back to prompting on a
+    tty that, by definition, is not there.
     """
     if _has_terminal():
         return "sudo", None
+    if _has_graphical_session() and shutil.which("pkexec"):
+        return "pkexec", None
     askpass = _find_askpass()
     if askpass:
         return "sudo -A", askpass
-    # No terminal and no helper. Leave plain sudo so the user sees sudo's own
-    # diagnosis rather than a silent difference in behaviour.
+    # No terminal, no polkit agent to ask and no helper. Leave plain sudo so
+    # the user sees sudo's own diagnosis rather than a silent difference in
+    # behaviour.
     return "sudo", None
 
 

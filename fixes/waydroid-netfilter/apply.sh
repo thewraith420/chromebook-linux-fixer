@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
-# Escalation is chosen by the caller: plain sudo in a terminal,
-# "sudo -A" under the GUI, which has no tty to prompt on.
+# Escalation is chosen by the caller: plain sudo in a terminal, pkexec
+# under the GUI, which has no tty to prompt on.
 SUDO="${FIXER_SUDO:-sudo}"
 SCRIPT=/usr/lib/waydroid/data/scripts/waydroid-net.sh
 BACKUP="$SCRIPT.chromebook-fixer.orig"

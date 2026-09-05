@@ -1,8 +1,8 @@
 #!/bin/bash
 set -uo pipefail
 
-# Escalation is chosen by the caller: plain sudo in a terminal,
-# "sudo -A" under the GUI, which has no tty to prompt on.
+# Escalation is chosen by the caller: plain sudo in a terminal, pkexec
+# under the GUI, which has no tty to prompt on.
 SUDO="${FIXER_SUDO:-sudo}"
 
 RUNNING=$(uname -r)

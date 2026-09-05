@@ -8,7 +8,6 @@ implementation. Anything the GUI can do, the CLI can do, and they cannot drift.
 """
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -34,10 +33,13 @@ STATE_TEXT = {
 
 def askpass_env():
     """
-    Fix scripts escalate with sudo, and there is no terminal here to type a
-    password into. Setting SUDO_ASKPASS alone is not enough - sudo reads it
-    only when invoked as `sudo -A` - so tell the CLI it has no tty and let
-    registry.sudo_command() pick the right form and locate a helper.
+    Fix scripts escalate as root, and there is no terminal here to type a
+    password into. Rather than decide how, tell the CLI it has no tty and let
+    registry.sudo_command() choose: pkexec, so the desktop's polkit agent
+    authenticates however the machine is set up to - a fingerprint reader,
+    typically - falling back to `sudo -A` and a graphical askpass helper.
+    (Setting SUDO_ASKPASS alone would not be enough: sudo reads it only when
+    invoked as `sudo -A`.)
 
     Announcing it rather than letting the CLI probe for /dev/tty matters when
     the GUI is launched *from* a terminal: that tty exists but the user is
@@ -305,6 +307,4 @@ class Application(Adw.Application):
 
 
 if __name__ == "__main__":
-    if not shutil.which("pkexec") and os.geteuid() != 0:
-        pass          # sudo + askpass is the path; pkexec is not required
     sys.exit(Application().run(None))

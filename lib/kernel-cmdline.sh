@@ -36,6 +36,11 @@
 
 set -uo pipefail
 
+# Escalation is chosen by the caller: plain sudo in a terminal, pkexec
+# under the GUI, which has no tty to prompt on. Never a bare "sudo" -
+# every fix that edits the cmdline comes through here.
+SUDO="${FIXER_SUDO:-sudo}"
+
 GRUB_DEFAULT=/etc/default/grub
 GRUB_KEY=GRUB_CMDLINE_LINUX_DEFAULT
 REFIND_LINUX=/boot/refind_linux.conf
@@ -177,10 +182,10 @@ edit_grub() {
     local action="$1" param="$2"
     [ -f "$GRUB_DEFAULT" ] || return 0
 
-    sudo cp -a "$GRUB_DEFAULT" "$GRUB_DEFAULT.chromebook-fixer.$STAMP" \
+    $SUDO cp -a "$GRUB_DEFAULT" "$GRUB_DEFAULT.chromebook-fixer.$STAMP" \
         || die "could not back up $GRUB_DEFAULT"
 
-    sudo python3 - "$GRUB_DEFAULT" "$GRUB_KEY" "$action" "$param" <<'PY'
+    $SUDO python3 - "$GRUB_DEFAULT" "$GRUB_KEY" "$action" "$param" <<'PY'
 import re, sys
 path, key, action, param = sys.argv[1:5]
 src = open(path).read()
@@ -202,10 +207,10 @@ open(path, "w").write(src)
 PY
     [ $? -eq 0 ] || die "failed editing $GRUB_DEFAULT"
 
-    if ! sudo update-grub >/dev/null 2>&1; then
+    if ! $SUDO update-grub >/dev/null 2>&1; then
         echo "update-grub failed; restoring backup" >&2
-        sudo cp -a "$GRUB_DEFAULT.chromebook-fixer.$STAMP" "$GRUB_DEFAULT"
-        sudo update-grub >/dev/null 2>&1
+        $SUDO cp -a "$GRUB_DEFAULT.chromebook-fixer.$STAMP" "$GRUB_DEFAULT"
+        $SUDO update-grub >/dev/null 2>&1
         die "update-grub failed, no changes kept"
     fi
 
@@ -222,10 +227,10 @@ edit_refind() {
     local action="$1" param="$2"
     [ -f "$REFIND_LINUX" ] || return 0
 
-    sudo cp -a "$REFIND_LINUX" "$REFIND_LINUX.chromebook-fixer.$STAMP" \
+    $SUDO cp -a "$REFIND_LINUX" "$REFIND_LINUX.chromebook-fixer.$STAMP" \
         || die "could not back up $REFIND_LINUX"
 
-    sudo python3 - "$REFIND_LINUX" "$action" "$param" <<'PY'
+    $SUDO python3 - "$REFIND_LINUX" "$action" "$param" <<'PY'
 import re, sys
 path, action, param = sys.argv[1:4]
 base = param.split("=", 1)[0]
@@ -262,10 +267,10 @@ edit_picker() {
         *) return 0 ;;
     esac
 
-    sudo cp -a "$PICKER_CFG" "$PICKER_CFG.chromebook-fixer.$STAMP" \
+    $SUDO cp -a "$PICKER_CFG" "$PICKER_CFG.chromebook-fixer.$STAMP" \
         || die "could not back up $PICKER_CFG"
 
-    sudo python3 - "$PICKER_CFG" "$PICKER_BEGIN" "$PICKER_END" "$action" "$param" <<'PY'
+    $SUDO python3 - "$PICKER_CFG" "$PICKER_BEGIN" "$PICKER_END" "$action" "$param" <<'PY'
 import re, sys
 path, begin, end, action, param = sys.argv[1:6]
 base = param.split("=", 1)[0]
