@@ -1,0 +1,33 @@
+id: touch-resume-rebind
+category: input
+name: Touchscreen dead after suspend (I2C-HID rebind on resume)
+risk: low
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+description: |
+  On this hardware the I2C-HID touchscreen does not come back from suspend.
+  Nothing looks wrong afterwards: the device is still enumerated, still shows
+  in /proc/bus/input/devices, hid-multitouch is still bound, and the kernel
+  logs no error at all. It simply stops producing events, so on a tablet you
+  resume to a machine with no usable input.
+
+  Unbinding and rebinding the device through the driver's sysfs handles
+  brings it straight back - it reappears as a fresh instance with
+  hid-multitouch reattached. This installs a systemd-sleep hook that does
+  exactly that on every resume.
+danger: |
+  Installs a script under /usr/lib/systemd/system-sleep/. It rebinds the
+  I2C-HID device on resume, which briefly (about a second) removes and
+  recreates the touchscreen's input devices. Revert removes the script.
+notes: |
+  Rebinds unconditionally rather than trying to detect the failure first.
+  The failure is silent - no error, no log line, and the device state looks
+  identical whether it is working or not - so there is nothing reliable to
+  test against, and the cost of being wrong in each direction is very
+  lopsided: a second of input churn versus a tablet you cannot touch.
+
+  Confirmed on Google Nocturne (Pixel Slate). The fault is not specific to
+  the panel vendor, so other I2C-HID touchscreens likely need it too, but
+  boards are only offered once someone has confirmed one - add them to
+  detect.sh.

@@ -1,0 +1,44 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# systemd-sleep hook: rebind the I2C-HID touchscreen after resume.
+#
+# On this hardware the touchscreen does not come back from suspend. The
+# device stays enumerated and hid-multitouch stays bound - /proc/bus/input/
+# devices looks completely healthy - it simply stops producing events, and
+# nothing is logged. There is no error to key off, which is why this rebinds
+# unconditionally rather than trying to detect the failure: an undetectable
+# fault that leaves a tablet with no usable input is worth ~1s of device
+# churn on every resume.
+#
+# Unbind/bind through the driver's sysfs handles is enough; no reboot, and
+# the device comes back as a fresh instance with hid-multitouch reattached.
+set -u
+
+LOG_TAG=chromebook-touch-resume
+DRIVER=/sys/bus/i2c/drivers/i2c_hid_acpi
+
+log() { logger -t "$LOG_TAG" "$1"; }
+
+case "$1/$2" in
+    post/suspend|post/hibernate|post/hybrid-sleep)
+        [ -d "$DRIVER" ] || exit 0
+        for path in "$DRIVER"/*; do
+            dev=${path##*/}
+            # Skip the driver's own control files.
+            case "$dev" in
+                bind|unbind|uevent|module|new_id|remove_id) continue ;;
+            esac
+            [ -L "$path" ] || continue
+            if printf '%s' "$dev" > "$DRIVER/unbind" 2>/dev/null; then
+                sleep 0.5
+                if printf '%s' "$dev" > "$DRIVER/bind" 2>/dev/null; then
+                    log "rebound $dev after resume"
+                else
+                    log "WARNING: unbound $dev but could not rebind it"
+                fi
+            fi
+        done
+        ;;
+esac
+
+exit 0
