@@ -89,7 +89,6 @@ echo "Kernel is not driving DPCD - installing the userspace brightness bridge."
 echo "It follows $BL and writes $AUX."
 echo
 
-# Point the unit at the daemon in the repo, like the other daemon fixes do.
 # Install the daemon into /usr/local/bin rather than running it out of the
 # repo. The unit sets ProtectHome=true, so a service pointed at
 # $FIXER_REPO/daemon/... under /home cannot exec its own binary (203/EXEC);

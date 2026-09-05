@@ -18,17 +18,22 @@ description: |
   ordinary KEY_VOLUMEUP / KEY_VOLUMEDOWN presses. No kernel changes, works on
   any distro.
 
-  This is the userspace equivalent of the in-kernel poll (kernel patch 9201) -
-  the DKMS fix ec-buttons-dkms does the same thing inside the kernel for people
-  who prefer that. Use ONE of the two, never both.
+  This is the userspace equivalent of the in-kernel poll (kernel patch 9201).
+  An out-of-tree DKMS module doing the same drain in-kernel used to be offered
+  here as ec-buttons-dkms; it was removed, because draining the FIFO only
+  produces key presses where cros_ec_keyb is bound, and firmware that hides
+  GOOG0007 (MrChromebox coreboot 2606.1 on Nocturne) leaves nothing to consume
+  the events. This fix works there because it never touches ACPI enumeration:
+  it reads the EC directly and injects through uinput.
 danger: |
   Installs and enables a root system service that opens /dev/cros_ec and
   /dev/uinput. The service is sandboxed to just those two devices. Revert
   disables and removes it cleanly.
 
   Do not run this alongside a kernel that already polls the EC FIFO (patch 9201,
-  or the ec-buttons-dkms fix): both would drain the same FIFO and race for
-  events. Detection refuses to offer it when the kernel is already polling.
+  or a leftover cros-ec-evpoll module): both would drain the same FIFO and race
+  for events. Detection refuses to offer it when the kernel is already polling
+  and something is actually consuming those events.
 notes: |
   Volume only, by design - the power button is left alone. The affected-board
   list currently holds Google Nocturne; add confirmed boards to detect.sh.

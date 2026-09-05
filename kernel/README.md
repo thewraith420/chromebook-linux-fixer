@@ -77,8 +77,8 @@ different fixes, and each one can hide the other.
 **The EC stops delivering.** Its interrupt fires once at boot and never again,
 so MKBP events pile up in a FIFO nobody drains. Volume keys, the sensor FIFO
 and lid angle all go quiet together, typically after some uptime rather than
-immediately. Patch 9201 fixes it in-kernel; `ec-buttons-poll` and
-`ec-buttons-dkms` do the same job from userspace and out-of-tree.
+immediately. Patch 9201 fixes it in-kernel; `ec-buttons-poll` does the same
+job from userspace.
 
 **GOOG0007 is hidden.** Firmware reports `_STA = 0` for the ACPI device
 `cros_ec_keyb` binds to, so that driver never probes and no volume-button input
@@ -90,9 +90,18 @@ They interact in a way that is easy to misread:
 
 - Draining the FIFO achieves nothing while GOOG0007 is hidden, because the
   events reach no consumer. A kernel carrying 9201 but not 9207 has healthy
-  delivery and dead buttons, and both button fixes here used to report "not
+  delivery and dead buttons, and the button fixes here used to report "not
   needed" on exactly that machine — they now check whether `cros-ec-keyb` is
   bound before deferring to the kernel.
+
+  This is what retired the out-of-tree module. `ec-buttons-dkms` shipped the
+  same drain as 9201 as a DKMS module; on 2026-09-05 it was applied on a stock
+  kernel with GOOG0007 hidden, reported itself installed, and restored nothing,
+  because there was no `cros_ec_keyb` to receive what it drained. Its other
+  selling points did not save it either — `cros-ec-accel`/`cros-ec-gyro` read
+  fine on demand over the synchronous command path with no drain at all, and
+  the lid switch is an ACPI device, not MKBP. It was removed; `ec-buttons-poll`
+  is the fix that works on a stock kernel.
 - `ec-buttons-poll` masks the GOOG0007 fault by accident. It reads
   `/dev/cros_ec` and injects through uinput, never touching ACPI enumeration
   or `cros_ec_keyb`, so the buttons work and the underlying bug is invisible.
@@ -112,10 +121,14 @@ Where a kernel patch is the tidier answer, the fix ships the userspace or
 out-of-tree equivalent instead:
 
 - `ec-buttons-poll` polls the EC from userspace - no kernel changes at all.
-- `ec-buttons-dkms` builds the same logic as an out-of-tree module.
 
-Both do 9201's job on a kernel that lacks it. The kernel patch is better where
-you already build your own kernel; these exist so you do not have to.
+That does 9201's job on a kernel that lacks it. The kernel patch is better
+where you already build your own kernel; this exists so you do not have to.
+An out-of-tree DKMS module (`ec-buttons-dkms`) used to offer 9201's drain
+without a rebuild, but a drain is only half the path: it needs 9207's
+enumeration fix to have any consumer, so on the firmware that hides GOOG0007
+it could not restore a button. Removed in favour of the userspace poll, which
+sidesteps the enumeration problem entirely.
 
 ## Detecting rather than assuming
 

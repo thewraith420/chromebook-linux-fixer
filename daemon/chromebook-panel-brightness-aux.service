@@ -6,7 +6,8 @@ ConditionPathExistsGlob=/dev/drm_dp_aux*
 
 [Service]
 Type=simple
-# apply.sh rewrites this to $FIXER_REPO/daemon/chromebook-panel-brightness-aux
+# apply.sh installs the daemon here (the unit sets ProtectHome=true, so it
+# cannot be run out of the repo under /home).
 ExecStart=/usr/local/bin/chromebook-panel-brightness-aux
 Restart=on-failure
 RestartSec=2

@@ -196,14 +196,26 @@ Guidelines that matter more than they look:
   first, then match against it.
 - **Escalate with `$SUDO`, never a bare `sudo`.** The CLI exports `FIXER_SUDO`
   and every script starts with `SUDO="${FIXER_SUDO:-sudo}"`. In a terminal that
-  resolves to plain `sudo`; under the GUI, which has no controlling terminal,
-  it becomes `sudo -A` with a graphical askpass. A bare `sudo` there dies with
-  *"sudo: A terminal is required to authenticate"* — setting `SUDO_ASKPASS` on
-  its own does nothing, because sudo consults that variable only under `-A`.
-- **Keep `$SUDO` out of pipelines.** `echo x | $SUDO tee f` runs sudo in a
-  forked subshell, and with no tty sudo caches its credential per *parent
-  process* — so each pipeline prompts for the password again. Use
-  `$SUDO tee f <<< "x"` and the whole script authenticates once.
+  resolves to plain `sudo`. Under the GUI, which has no controlling terminal,
+  it becomes `pkexec`, so the desktop's polkit agent authenticates however the
+  machine is set up to — on a Chromebook that means the fingerprint reader
+  rather than a password box. Where there is no graphical session to show a
+  polkit prompt it falls back to `sudo -A` with an askpass helper. A bare
+  `sudo` under the GUI dies with *"sudo: A terminal is required to
+  authenticate"*, and setting `SUDO_ASKPASS` on its own does not save you,
+  because sudo consults that variable only under `-A`. This applies to shared
+  library code too — `lib/kernel-cmdline.sh` is sourced by every cmdline fix,
+  so one bare `sudo` in it breaks all of them at once.
+- **Keep `$SUDO` out of pipelines.** `echo x | $SUDO tee f` runs the escalation
+  in a forked subshell. With no tty sudo caches its credential per *parent
+  process*, so each pipeline prompts again. Write to a temp file and
+  `$SUDO install` it, or use `$SUDO tee f <<< "x"`.
+- **Batch root work into a single `$SUDO`.** pkexec's polkit action is
+  `auth_admin`, not `auth_admin_keep` — there is no credential cache, so every
+  `$SUDO` in a script is another authentication prompt. One since-removed DKMS
+  fix fired nine of them, spread across a build that takes minutes. Put the
+  whole privileged sequence in one `$SUDO bash -s -- "$A" "$B" <<'ROOT'`
+  heredoc instead.
 - **Write the `danger` field from experience.** Generic caution teaches nobody
   anything; "this locked the machine three times and left the boot filesystem
   dirty" tells someone exactly how much care to take.
@@ -228,7 +240,7 @@ kernel/                  kernel patches (shipped, not applied)
 
 **Audio** — `audio-avs-dsp`
 
-**Buttons and sensors** — `ec-buttons-dkms`, `ec-buttons-poll`
+**Buttons and sensors** — `ec-buttons-poll`
 
 **Login and security** — `cros-fp-fingerprint`
 

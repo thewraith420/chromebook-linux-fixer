@@ -10,7 +10,7 @@
 #
 #   1. The EC stops delivering MKBP events - its interrupt fires once at boot
 #      and never again. Someone has to drain the event FIFO: kernel patch 9201,
-#      the ec-buttons-dkms module, or the ec-buttons-poll userspace service.
+#      or the ec-buttons-poll userspace service.
 #
 #   2. GOOG0007's ACPI _STA reports 0, so cros_ec_keyb never probes and no
 #      volume-button input device is ever created. Seen on the Pixel Slate
@@ -54,9 +54,27 @@ goog0007_status() {
     [ -d "$DRIVER" ] && return 0
 
     # The driver is not registered at all - built as a module and not loaded,
-    # or not built. On an affected board that is itself consistent with the
-    # fault (nothing autoloads a driver for a device ACPI says is absent), but
-    # it is not proof, so say so rather than pick.
+    # or not built. On an affected board that is consistent with the fault
+    # (nothing autoloads a driver for a device ACPI says is absent), but the
+    # driver's absence alone is not proof. Ask ACPI enumeration instead.
+    #
+    # physical_node is the platform device the ACPI core creates for a node it
+    # considers present. No node, no device for any driver to ever bind to.
+    # This is NOT the /status trap documented above: status_show() re-evaluates
+    # _STA against firmware and ignores the kernel's override, whereas
+    # enumeration goes through acpi_bus_get_status(), which consults
+    # acpi_device_override_status() - so patch 9207 makes physical_node appear
+    # while /status still reads 0. Verified on the reference machine: hidden
+    # GOOG0007:00 has no physical_node, while GOOG0004:00 (the EC, _STA = 15)
+    # has physical_node and physical_node1.
+    if [ -d /sys/bus/acpi/devices/GOOG0007:00 ]; then
+        for node in /sys/bus/acpi/devices/GOOG0007:*/physical_node*; do
+            [ -e "$node" ] && return 2   # enumerated, but no driver bound to it
+        done
+        return 0                          # not enumerated: firmware hides it
+    fi
+
+    # No GOOG0007 on this board at all - not applicable, not a fault.
     return 2
 }
 

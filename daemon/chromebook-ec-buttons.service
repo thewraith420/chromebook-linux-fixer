@@ -6,7 +6,8 @@ ConditionPathExists=/dev/cros_ec
 
 [Service]
 Type=simple
-# apply.sh rewrites this to $FIXER_REPO/daemon/chromebook-ec-buttons
+# apply.sh installs the daemon here (the unit sets ProtectHome=true, so it
+# cannot be run out of the repo under /home).
 ExecStart=/usr/local/bin/chromebook-ec-buttons
 Restart=on-failure
 RestartSec=2

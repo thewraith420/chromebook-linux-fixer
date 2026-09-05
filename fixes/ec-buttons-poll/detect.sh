@@ -15,10 +15,12 @@ set -uo pipefail
 # reports "not needed" at someone whose volume keys do nothing. Only defer to
 # the kernel when its events have a consumer - or when we cannot tell, since
 # racing a working EC is the worse mistake.
+"$FIXER_REPO/lib/ec-buttons.sh" goog0007
+GOOG=$?     # 0 = GOOG0007 hidden, so a FIFO drain has no consumer
+
 POLL=/sys/module/cros_ec/parameters/ec_event_poll_ms
 if [ -r "$POLL" ] && [ "$(cat "$POLL" 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null; then
-    "$FIXER_REPO/lib/ec-buttons.sh" goog0007
-    [ $? -eq 0 ] || exit 1
+    [ "$GOOG" -eq 0 ] || exit 1
     echo "kernel is polling the EC FIFO, but GOOG0007 is hidden by firmware so"
     echo "cros_ec_keyb never bound - the events reach no one (kernel patch 9207"
     echo "fixes this properly; this fix injects the keys from userspace instead)"
@@ -27,9 +29,21 @@ fi
 # Already running ours?
 systemctl is-active chromebook-ec-buttons.service >/dev/null 2>&1 && exit 1
 
-# The DKMS add-on (ec-buttons-dkms) does the same job in-kernel. They are
-# alternatives - if it is loaded, this userspace poll is not needed.
-[ -d /sys/module/cros_ec_evpoll ] && exit 1
+# Legacy guard: cros-ec-evpoll was an out-of-tree module (the removed
+# ec-buttons-dkms fix) that drained the FIFO in-kernel. A machine that still
+# has it loaded from an older checkout must not also run this, or the two
+# race for the same events. Same caveat as the kernel-poll branch above:
+# draining only produces key presses if something consumes them, and
+# deferring unconditionally reported "not needed" on a machine where that
+# module was loaded and could not restore a single button, because GOOG0007
+# was hidden. Defer only when the drain actually reaches a consumer.
+if [ -d /sys/module/cros_ec_evpoll ]; then
+    [ "$GOOG" -eq 0 ] || exit 1
+    echo "a cros-ec-evpoll module is loaded and draining the EC FIFO, but"
+    echo "GOOG0007 is hidden so cros_ec_keyb never bound and those events reach"
+    echo "no one. This fix injects the keys from userspace instead - but the two"
+    echo "drain the same FIFO, so unload cros-ec-evpoll before applying this."
+fi
 
 # The dead-EC-delivery fault is board specific. Only offer this where it is
 # confirmed - enabling it on a board whose EC path works would race the kernel
