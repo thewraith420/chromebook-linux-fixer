@@ -43,3 +43,7 @@ notes: |
   TCON backlight adjustment and AUX brightness set capability. Other boards
   with the same symptom should work, but are not on the offered list until
   someone confirms one - add them to detect.sh.
+  Kernel-aware at runtime: the service re-checks at every startup whether the
+  running kernel already does this job and exits quietly if so, so it can stay
+  installed on a machine that dual-boots a patched kernel and a stock one.
+  Run the daemon with --why to see the decision on the kernel you are on.

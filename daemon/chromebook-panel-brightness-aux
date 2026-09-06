@@ -139,6 +139,45 @@ class Panel:
         return (raw[0] << 8) | raw[1]
 
 
+def kernel_drives_backlight(panel, bright_path, max_raw):
+    """Does the running kernel already drive this panel's DPCD backlight?
+
+    Same question apply.sh asks before installing - but asked again here, at
+    every startup, because the answer belongs to the kernel that booted and
+    this service is not reinstalled when you reboot into a different one. A
+    machine that dual-boots a patched kernel (9200) and a stock one crosses
+    that line constantly; leaving this running on the patched side puts two
+    writers on register 0x722, one of them re-asserting every two seconds.
+
+    The probe nudges sysfs by ~3% and watches whether DPCD follows. That is
+    far too small to see, and it is put back immediately - unlike apply.sh's
+    40%/90% swing, which is fine once during an install but would be a visible
+    flash at every boot.
+    """
+    try:
+        before = panel.get_brightness()
+        orig = read_int(bright_path)
+        if orig is None:
+            return False, "cannot read sysfs brightness"
+        delta = max(1, round(max_raw * 0.03))
+        probe = orig - delta if orig > delta else orig + delta
+        with open(bright_path, "w") as fh:
+            fh.write(str(probe))
+        time.sleep(0.4)
+        after = panel.get_brightness()
+        with open(bright_path, "w") as fh:
+            fh.write(str(orig))
+        time.sleep(0.1)
+    except OSError as exc:
+        # Can't tell - and guessing "kernel handles it" would silently leave
+        # the panel with no brightness control at all. Assume it does not.
+        return False, f"probe failed ({exc}); assuming the kernel does not"
+    if after != before:
+        return True, (f"kernel drives DPCD itself (0x{before:04x} -> 0x{after:04x} "
+                      "when sysfs moved)")
+    return False, "kernel leaves DPCD alone (register did not follow sysfs)"
+
+
 def main():
     aux = find_edp_aux()
     if not aux:
@@ -167,6 +206,16 @@ def main():
         print(f"{aux}: panel does not advertise AUX backlight control",
               file=sys.stderr)
         return 1
+
+    handled, why = kernel_drives_backlight(panel, bright_path, max_raw)
+    if "--why" in sys.argv:
+        print(("stand down: " if handled else "run: ") + why)
+        return 0
+    if handled:
+        # Exit 0 rather than fail: Restart=on-failure then leaves this alone
+        # until the next boot, which is exactly what we want.
+        print(f"standing down - {why}", flush=True)
+        return 0
 
     print(f"following {bright_path} (0..{max_raw}) -> {aux} DPCD "
           f"0x{EDP_BACKLIGHT_BRIGHTNESS:03x} (0..0x{DPCD_MAX:04x})", flush=True)

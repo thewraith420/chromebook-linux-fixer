@@ -37,3 +37,7 @@ danger: |
 notes: |
   Volume only, by design - the power button is left alone. The affected-board
   list currently holds Google Nocturne; add confirmed boards to detect.sh.
+  Kernel-aware at runtime: the service re-checks at every startup whether the
+  running kernel already does this job and exits quietly if so, so it can stay
+  installed on a machine that dual-boots a patched kernel and a stock one.
+  Run the daemon with --why to see the decision on the kernel you are on.

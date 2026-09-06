@@ -23,6 +23,7 @@ Deliberately handles volume only. The power button is intentionally left alone.
 
 import ctypes
 import fcntl
+import glob
 import os
 import struct
 import sys
@@ -70,6 +71,41 @@ _INPUT_EVENT = struct.Struct("=qqHHi")
 
 def log(msg):
     print(f"chromebook-ec-buttons: {msg}", file=sys.stderr, flush=True)
+
+
+# Kernels differ, and this service does not get reinstalled when you reboot
+# into a different one. The fixer refuses to *install* this alongside a kernel
+# that drains the FIFO itself, but that decision is made once, at apply time,
+# on whichever kernel happened to be running - and a machine that dual-boots a
+# patched kernel (9201 + 9207) and a stock one crosses that line every reboot
+# with nothing reinstalled. Two drains on one FIFO do not double up, they
+# compete: each event goes to whoever asks first, so volume presses turn
+# intermittent and the sensor hub silently loses events. So decide again at
+# every startup, in the kernel we actually booted.
+EC_POLL_PARAM = "/sys/module/cros_ec/parameters/ec_event_poll_ms"
+KEYB_DRIVER = "/sys/bus/platform/drivers/cros-ec-keyb"
+
+
+def kernel_already_handles():
+    """Is the running kernel already delivering these buttons? (bool, why)."""
+    try:
+        with open(EC_POLL_PARAM) as fh:
+            poll_ms = int(fh.read().strip())
+    except (OSError, ValueError):
+        return False, "kernel is not polling the EC FIFO (no ec_event_poll_ms)"
+    if poll_ms <= 0:
+        return False, f"kernel poll is disabled (ec_event_poll_ms={poll_ms})"
+
+    # Draining is only half the path: the events still need cros_ec_keyb bound
+    # to GOOG0007 to become key presses. A kernel with 9201 but not 9207 has
+    # healthy delivery and dead buttons, and standing down there would leave
+    # the user with nothing at all.
+    bound = sorted(glob.glob(KEYB_DRIVER + "/GOOG0007:*"))
+    if not bound:
+        return False, (f"kernel polls every {poll_ms}ms but cros-ec-keyb is not "
+                       "bound (GOOG0007 hidden), so nothing consumes those events")
+    return True, (f"kernel polls the EC FIFO every {poll_ms}ms and cros-ec-keyb "
+                  f"is bound to {os.path.basename(bound[0])}")
 
 
 class Uinput:
@@ -152,6 +188,15 @@ def run():
 
 
 if __name__ == "__main__":
+    handled, why = kernel_already_handles()
+    if "--why" in sys.argv:
+        print(("stand down: " if handled else "run: ") + why)
+        sys.exit(0)
+    if handled:
+        # Exit 0, not an error: Restart=on-failure then leaves us alone until
+        # the next boot, which is exactly the intent.
+        log("standing down - " + why)
+        sys.exit(0)
     try:
         run()
     except KeyboardInterrupt:
