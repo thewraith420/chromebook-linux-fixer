@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- SPDX-License-Identifier: GPL-3.0-or-later
-     chromebook-fixer application icon: the device, and the tool acting on it.
-     Warm amber on cool slate on purpose - this icon sits in a shelf of
-     blue-grey settings icons and has to be findable among them. Drawn so the
-     wrench still carries the shape at 16px, where the screen behind it stops
-     being a screen and becomes texture. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later
+       chromebook-fixer application icon: the device, and the tool acting on it.
+       Warm amber on cool slate on purpose - this icon sits in a shelf of
+       blue-grey settings icons and has to be findable among them. Drawn so the
+       wrench still carries the shape at 16px, where the screen behind it stops
+       being a screen and becomes texture. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#42557a"/>
