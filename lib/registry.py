@@ -43,6 +43,7 @@ CATEGORIES = {
     "input":    "Buttons and sensors",
     "security": "Login and security",
     "android":  "Android (Waydroid)",
+    "boot":     "Booting and recovery",
     "system":   "System and performance",
     "other":    "Other",
 }

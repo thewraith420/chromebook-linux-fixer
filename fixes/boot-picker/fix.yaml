@@ -1,0 +1,46 @@
+id: boot-picker
+category: boot
+name: Touch boot picker (choose a kernel without a keyboard)
+risk: high
+reverts_cleanly: true
+applies_to:
+  chromebook: true
+  product: "nocturne"
+description: |
+  On a tablet with no attached keyboard, GRUB's menu cannot be navigated. The
+  machine boots whatever the default entry is, and picking anything else means
+  finding a keyboard - so in practice you never pick anything else.
+
+  nocturne-boot-picker replaces that with a TWRP-style touch menu: a small
+  dedicated kernel and initramfs that GRUB hands control to, which reads the
+  live grub.cfg, draws a touch list of every kernel it finds, and kexecs into
+  the one you tap. It is not a bootloader replacement - GRUB stays completely
+  unmodified, the entry lives in /boot/grub/custom.cfg, and update-grub is
+  never run.
+
+  This fix installs it. It does not build or install any real kernel: the
+  picker discovers whatever is already in grub.cfg, so kernels you install
+  separately appear in its list on their own.
+danger: |
+  This writes a boot entry. On a machine with no keyboard, a boot problem is
+  harder to escape than usual, so read this before applying.
+
+  The entry is APPENDED and does not become the default - selecting it is a
+  deliberate act. install-picker.sh refuses outright to run under
+  GRUB_DEFAULT=saved, where booting the picker once would silently make it
+  permanent. If you later set it as the default yourself, understand that a
+  broken picker image then loops until you attach a keyboard.
+
+  The picker falls back to booting the first discovered kernel if the display
+  or touch fails, and on a timeout, so a failure is meant to be survivable
+  rather than terminal. It has been run end-to-end on exactly one machine.
+
+  Revert removes the entry and /boot/picker entirely and touches nothing else.
+notes: |
+  Needs the nocturne-boot-picker checkout and a prebuilt picker kernel image;
+  apply says exactly what is missing and where it looked. Point it explicitly
+  with FIXER_PICKER_REPO=/path and FIXER_PICKER_KERNEL=/path/to/vmlinuz.
+
+  The initramfs is built here at apply time, not shipped: it bundles the local
+  busybox, kexec and the libraries the picker binary links against, so one
+  built on another machine produces a picker that will not start.
