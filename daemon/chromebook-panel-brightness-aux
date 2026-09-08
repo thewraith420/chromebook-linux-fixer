@@ -56,6 +56,17 @@ DPCD_MAX = 0xFFFF
 # above this anyway, so in practice this only catches pathological writes.
 DPCD_FLOOR = 0x0300
 
+# Which interface i915 chose is visible in the backlight range, with no root
+# and no version test: VESA AUX brightness-set exposes the full 16 bits, while
+# native PWM on this panel exposes 7500 - and native PWM is exactly the path
+# that does not physically drive it. Both figures are the before and after
+# recorded in kernel patch 9200's own commit message, and both were measured
+# here: 65535 on a kernel carrying it, 7500 on a stock one. Weaker evidence
+# than actually moving the register, so it backs up --why for an unprivileged
+# caller and never the daemon's own decision.
+BL_VESA_AUX_MAX = 65535
+BL_NATIVE_PWM_MAX = 7500
+
 POLL_INTERVAL = 0.1             # responsiveness of slider/keys
 REASSERT_EVERY = 20             # ~2s: re-check the panel kept our value
 
@@ -139,6 +150,19 @@ class Panel:
         return (raw[0] << 8) | raw[1]
 
 
+def backlight_interface_hint(max_raw):
+    """Infer the interface from the sysfs range alone. (verdict|None, why)."""
+    if max_raw == BL_VESA_AUX_MAX:
+        return True, (f"backlight range is {max_raw}, the 16-bit VESA AUX range, "
+                      "so the kernel is driving the panel over DPCD itself")
+    if max_raw == BL_NATIVE_PWM_MAX:
+        return False, (f"backlight range is {max_raw}, this panel's native PWM "
+                       "range - the path that does not physically drive it")
+    return None, (f"backlight range {max_raw} matches neither the VESA AUX range "
+                  f"({BL_VESA_AUX_MAX}) nor this panel's native PWM range "
+                  f"({BL_NATIVE_PWM_MAX})")
+
+
 def kernel_drives_backlight(panel, bright_path, max_raw):
     """Does the running kernel already drive this panel's DPCD backlight?
 
@@ -198,6 +222,19 @@ def main():
 
     try:
         panel = Panel(aux)
+    except PermissionError:
+        # --why is the one thing here a human runs casually, and they will not
+        # think to sudo it. Answer from the backlight range instead, and say
+        # plainly that it is the indirect signal - the daemon proper still
+        # decides by moving the register, and it runs as root.
+        if "--why" in sys.argv:
+            handled, why = backlight_interface_hint(max_raw)
+            label = {True: "stand down", False: "run", None: "cannot tell"}[handled]
+            print(f"{label}: {why}")
+            print(f"(indirect: {aux} needs root for the authoritative probe)")
+            return 0
+        print(f"cannot open {aux}: permission denied", file=sys.stderr)
+        return 1
     except OSError as exc:
         print(f"cannot open {aux}: {exc}", file=sys.stderr)
         return 1
