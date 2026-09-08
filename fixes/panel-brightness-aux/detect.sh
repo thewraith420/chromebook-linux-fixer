@@ -50,7 +50,18 @@ esac
 # full 16 bits, or through native PWM, whose range on this panel is 7500 - and
 # native PWM is precisely the path that does not physically drive it. Those
 # numbers are not guesses; they are the before and after in 9200's own commit
-# message.
+# message, and were then measured again from the other direction on this
+# machine: on 7.2.3 (which has 9200) the range is 65535 and the DPCD probe
+# shows the kernel driving the register, while on 7.0.0-30-generic (which does
+# not) the range is 7500 and the register does not follow. Range and behaviour
+# agree on both kernels, so this is not a proxy that happens to correlate.
+#
+# BOTH NUMBERS ARE PROPERTIES OF THIS PANEL, NOT UNIVERSAL. 7500 is Nocturne's
+# native PWM range; another board's will differ. The DMI gate above is what
+# makes hardcoding them safe, so if you widen that gate, re-measure both values
+# on the board you are adding - otherwise its unrecognised range quietly
+# becomes exit 2 on hardware this fix would have helped. apply.sh's DPCD probe
+# is the backstop either way, since it observes rather than infers.
 BL_MAX=
 for d in /sys/class/backlight/*/max_brightness; do
     [ -r "$d" ] && { BL_MAX=$(cat "$d" 2>/dev/null); break; }
