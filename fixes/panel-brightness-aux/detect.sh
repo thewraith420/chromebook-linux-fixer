@@ -39,5 +39,37 @@ case "$VENDOR/$PRODUCT" in
         ;;
 esac
 
-echo "$VENDOR $PRODUCT: eDP panel present, kernel-side DPCD backlight known-dead here"
+# "Known-dead here" is a claim about the KERNEL, and the lines above only
+# establish the board. The same Nocturne runs kernels that drive this panel
+# over AUX perfectly well - BobZKernel carries patch 9200, which relaxes the
+# capability gate i915 7.x added, and on that kernel installing a second writer
+# is the bug rather than the fix.
+#
+# The interface it picked says which happened, without needing root. i915
+# drives this panel either through VESA AUX brightness-set, whose range is the
+# full 16 bits, or through native PWM, whose range on this panel is 7500 - and
+# native PWM is precisely the path that does not physically drive it. Those
+# numbers are not guesses; they are the before and after in 9200's own commit
+# message.
+BL_MAX=
+for d in /sys/class/backlight/*/max_brightness; do
+    [ -r "$d" ] && { BL_MAX=$(cat "$d" 2>/dev/null); break; }
+done
+case "${BL_MAX:-}" in
+    65535)
+        echo "the kernel is already driving this panel over DPCD/AUX"
+        echo "(backlight range ${BL_MAX}, the 16-bit VESA AUX range - native PWM"
+        echo "would read 7500 here). A second writer would fight it."
+        exit 1 ;;
+    7500)
+        ;;                              # native PWM: the fault this fixes
+    *)
+        echo "eDP panel present, but its backlight range (${BL_MAX:-unreadable})"
+        echo "matches neither the VESA AUX range nor this panel's native PWM"
+        echo "range, so which interface the kernel chose cannot be told from here"
+        exit 2 ;;
+esac
+
+echo "$VENDOR $PRODUCT: eDP panel present, kernel on native PWM which does not"
+echo "drive this panel (backlight range $BL_MAX)"
 exit 0
