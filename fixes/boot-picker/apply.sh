@@ -105,5 +105,11 @@ echo "grub.cfg is NOT regenerated and no existing entry moves)"
 $SUDO "$INSTALLER" "$KERNEL" "$IMG"
 
 echo
-echo "Reboot and choose 'Boot Picker (touch)' from the GRUB menu."
+# Read the title back out rather than hardcoding it: the installer chooses it,
+# and it changed with the rename ('Boot Picker (touch)' -> 'Nightfall (touch)').
+# Telling someone to look for an entry that is not in their menu is a bad last
+# line for a fix that just rewrote how the machine boots.
+TITLE=$(sed -n "s/^[[:space:]]*menuentry[[:space:]]*['\"]\([^'\"]*\).*/\1/p" \
+        /boot/grub/custom.cfg 2>/dev/null | tail -1)
+echo "Reboot and choose ${TITLE:+\'$TITLE\' }from the GRUB menu."
 echo "It is not the default: every normal entry still boots exactly as before."
