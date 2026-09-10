@@ -6,20 +6,29 @@ SUDO="${FIXER_SUDO:-sudo}"
 # this fix installs it, it does not vendor it.
 REPO="${FIXER_PICKER_REPO:-}"
 if [ -z "$REPO" ]; then
-    for c in "$HOME/nocturne-boot-picker" "$HOME/buildstuff/nocturne-boot-picker"; do
+    # Renamed project; the old checkout name still exists on machines that
+    # cloned before the rename, and GitHub redirects the old URL either way.
+    for c in "$HOME/nightfall-boot-manager" "$HOME/buildstuff/nightfall-boot-manager" \
+             "$HOME/nocturne-boot-picker" "$HOME/buildstuff/nocturne-boot-picker"; do
         [ -d "$c" ] && { REPO="$c"; break; }
     done
 fi
-if [ -z "$REPO" ] || [ ! -x "$REPO/boot-integration/install-picker.sh" ]; then
-    echo "nocturne-boot-picker checkout not found."
-    echo "Looked in: \$FIXER_PICKER_REPO, ~/nocturne-boot-picker,"
-    echo "           ~/buildstuff/nocturne-boot-picker"
+INSTALLER=
+for cand in install-nightfall.sh install-picker.sh; do
+    [ -n "$REPO" ] && [ -x "$REPO/boot-integration/$cand" ] && {
+        INSTALLER="$REPO/boot-integration/$cand"; break; }
+done
+if [ -z "$INSTALLER" ]; then
+    echo "nightfall-boot-manager checkout not found (formerly nocturne-boot-picker)."
+    echo "Looked in: \$FIXER_PICKER_REPO, ~/nightfall-boot-manager,"
+    echo "           ~/buildstuff/nightfall-boot-manager, and the pre-rename"
+    echo "           ~/nocturne-boot-picker paths"
     echo
-    echo "  git clone https://github.com/thewraith420/nocturne-boot-picker"
+    echo "  git clone https://github.com/thewraith420/nightfall-boot-manager"
     echo "  chromebook-fixer apply boot-picker"
     echo
     echo "Or point at an existing one:"
-    echo "  FIXER_PICKER_REPO=/path/to/nocturne-boot-picker chromebook-fixer apply boot-picker"
+    echo "  FIXER_PICKER_REPO=/path/to/nightfall-boot-manager chromebook-fixer apply boot-picker"
     echo "Nothing was changed."
     exit 1
 fi
@@ -30,7 +39,7 @@ echo "picker source: $REPO"
 # it - so it must already exist somewhere.
 KERNEL="${FIXER_PICKER_KERNEL:-}"
 if [ -z "$KERNEL" ]; then
-    for c in /boot/picker/vmlinuz "$REPO"/picker-kernel/vmlinuz* \
+    for c in /boot/nightfall/vmlinuz /boot/picker/vmlinuz "$REPO"/picker-kernel/vmlinuz* \
              "$HOME"/buildstuff/BobZKernel/installer-*picker*/boot/vmlinuz-*; do
         [ -r "$c" ] && { KERNEL="$c"; break; }
     done
@@ -50,7 +59,8 @@ echo "picker kernel: $KERNEL"
 # refuses to copy a file onto itself and the whole install aborts partway.
 # Hand it a copy instead, so the common "rebuild the initramfs" case works.
 TMPDIR_PICKER=""
-if [ "$(readlink -f "$KERNEL")" = /boot/picker/vmlinuz ]; then
+KREAL=$(readlink -f "$KERNEL")
+if [ "$KREAL" = /boot/nightfall/vmlinuz ] || [ "$KREAL" = /boot/picker/vmlinuz ]; then
     TMPDIR_PICKER=$(mktemp -d)
     trap 'rm -rf "$TMPDIR_PICKER"' EXIT
     cp "$KERNEL" "$TMPDIR_PICKER/vmlinuz"
@@ -90,9 +100,9 @@ echo "building the initramfs (verifies itself at the end)..."
 # cache, so a second $SUDO is a second password prompt. Everything above this
 # line runs unprivileged, which is why it can all happen first.
 echo
-echo "installing (writes /boot/picker and one entry in /boot/grub/custom.cfg;"
+echo "installing (writes /boot/<picker dir> and one entry in /boot/grub/custom.cfg;"
 echo "grub.cfg is NOT regenerated and no existing entry moves)"
-$SUDO "$REPO/boot-integration/install-picker.sh" "$KERNEL" "$IMG"
+$SUDO "$INSTALLER" "$KERNEL" "$IMG"
 
 echo
 echo "Reboot and choose 'Boot Picker (touch)' from the GRUB menu."

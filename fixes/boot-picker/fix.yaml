@@ -11,12 +11,17 @@ description: |
   machine boots whatever the default entry is, and picking anything else means
   finding a keyboard - so in practice you never pick anything else.
 
-  nocturne-boot-picker replaces that with a TWRP-style touch menu: a small
+  Nightfall Boot Manager (formerly nocturne-boot-picker) replaces that with a
+  TWRP-style touch menu: a small
   dedicated kernel and initramfs that GRUB hands control to, which reads the
   live grub.cfg, draws a touch list of every kernel it finds, and kexecs into
   the one you tap. It is not a bootloader replacement - GRUB stays completely
   unmodified, the entry lives in /boot/grub/custom.cfg, and update-grub is
   never run.
+
+  Both the pre-rename and post-rename layouts are recognised, so detect,
+  verify and revert keep working across that migration rather than reporting a
+  working install as absent.
 
   This fix installs it. It does not build or install any real kernel: the
   picker discovers whatever is already in grub.cfg, so kernels you install
@@ -37,7 +42,7 @@ danger: |
 
   Revert removes the entry and /boot/picker entirely and touches nothing else.
 notes: |
-  Needs the nocturne-boot-picker checkout and a prebuilt picker kernel image;
+  Needs the nightfall-boot-manager checkout and a prebuilt picker kernel image;
   apply says exactly what is missing and where it looked. Point it explicitly
   with FIXER_PICKER_REPO=/path and FIXER_PICKER_KERNEL=/path/to/vmlinuz.
 

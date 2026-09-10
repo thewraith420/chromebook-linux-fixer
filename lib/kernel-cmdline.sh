@@ -44,9 +44,16 @@ SUDO="${FIXER_SUDO:-sudo}"
 GRUB_DEFAULT=/etc/default/grub
 GRUB_KEY=GRUB_CMDLINE_LINUX_DEFAULT
 REFIND_LINUX=/boot/refind_linux.conf
-PICKER_CFG=/boot/grub/custom.cfg
-PICKER_BEGIN="### BEGIN nocturne-boot-picker ###"
-PICKER_END="### END nocturne-boot-picker ###"
+# Overridable so the rename handling can be exercised against both layouts
+# without a machine in each state.
+PICKER_CFG="${PICKER_CFG:-/boot/grub/custom.cfg}"
+# The boot picker was renamed (nocturne-boot-picker -> nightfall-boot-manager)
+# and its marker changed with it. A machine can be on either side of that
+# migration, so match whichever is actually on disk rather than the current
+# name: keying on the new one alone silently stops finding an older install,
+# and that failure is invisible - the block is simply never seen again.
+# Newest first, so a machine carrying both resolves to the current one.
+PICKER_NAMES="nightfall-boot-manager nocturne-boot-picker"
 STAMP=$(date +%Y%m%d%H%M%S)
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -77,15 +84,27 @@ active_bootloader() {
 # The picker's entry, identified by the markers install-picker.sh writes.
 # Absent markers mean the picker is not installed, or was installed by hand -
 # either way there is no block we own the shape of, so leave it alone.
-picker_installed() {
+# Which of the project's names marks the block on this machine, if any.
+picker_marker() {
     [ -f "$PICKER_CFG" ] || return 1
-    grep -qF "$PICKER_BEGIN" "$PICKER_CFG" 2>/dev/null
+    local n
+    for n in $PICKER_NAMES; do
+        if grep -qF "### BEGIN $n ###" "$PICKER_CFG" 2>/dev/null; then
+            echo "$n"; return 0
+        fi
+    done
+    return 1
+}
+
+picker_installed() {
+    picker_marker >/dev/null 2>&1
 }
 
 # The kernel options on the picker entry's own "linux" line.
 picker_cmdline() {
-    picker_installed || return 1
-    awk -v b="$PICKER_BEGIN" -v e="$PICKER_END" '
+    local name
+    name=$(picker_marker) || return 1
+    awk -v b="### BEGIN $name ###" -v e="### END $name ###" '
         index($0, b) { inblock = 1; next }
         index($0, e) { inblock = 0; next }
         inblock && $1 == "linux" {
@@ -257,8 +276,8 @@ PY
 }
 
 edit_picker() {
-    local action="$1" param="$2"
-    picker_installed || return 0
+    local action="$1" param="$2" NAME
+    NAME=$(picker_marker) || return 0
 
     # The picker mounts its own root and draws on the panel; nothing else on
     # the command line is its business. install-picker.sh makes the same cut.
@@ -270,7 +289,8 @@ edit_picker() {
     $SUDO cp -a "$PICKER_CFG" "$PICKER_CFG.chromebook-fixer.$STAMP" \
         || die "could not back up $PICKER_CFG"
 
-    $SUDO python3 - "$PICKER_CFG" "$PICKER_BEGIN" "$PICKER_END" "$action" "$param" <<'PY'
+    $SUDO python3 - "$PICKER_CFG" "### BEGIN $NAME ###" "### END $NAME ###" \
+        "$action" "$param" <<'PY'
 import re, sys
 path, begin, end, action, param = sys.argv[1:6]
 base = param.split("=", 1)[0]
