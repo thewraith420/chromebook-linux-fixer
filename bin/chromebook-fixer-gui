@@ -121,8 +121,19 @@ class Window(Adw.ApplicationWindow):
     """
 
     def __init__(self, app):
+        # Height is sized to the category list, which is the first thing shown:
+        # eight rows at ~64px plus the machine group, headings and margins comes
+        # to roughly 850. 720 fit when there were seven categories and quietly
+        # started clipping the last one when "Booting and recovery" was added -
+        # the page scrolls, so nothing breaks, but a cut-off row reads as the
+        # end of the list rather than as more below. Anything added to
+        # CATEGORIES in lib/registry.py should be checked against this.
+        #
+        # The ceiling is the Slate's own panel: 3000x2000 at ~293 PPI is 2x
+        # scaled to ~1500x1000 logical, so this has to stay under ~960 once the
+        # top bar is taken off.
         super().__init__(application=app, title="Chromebook Fixer",
-                         default_width=760, default_height=720)
+                         default_width=760, default_height=900)
         self.machine = Machine.detect()
         self.rows = []              # every FixRow, for refreshing
         self.category_rows = {}     # category key -> (row, fixes)
