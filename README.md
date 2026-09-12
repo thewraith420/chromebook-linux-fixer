@@ -233,17 +233,19 @@ kernel/                  kernel patches (shipped, not applied)
 
 ## What is covered
 
-19 fixes at present, grouped by the part of the machine they concern:
+20 fixes at present, grouped by the part of the machine they concern:
 
-**Camera** — `camera-follow-rotation`, `camera-orientation`, `ipu3-camera`, `ipu3-imgu-grableak`, `ipu3-imgu-iommu`, `ipu3-vcm-focus`
+**Camera** — `camera-orientation`, `ipu3-camera`, `ipu3-imgu-grableak`, `ipu3-imgu-iommu`, `ipu3-vcm-focus`
 
-**Screen, brightness and rotation** — `accelerometer-orientation`, `backlight-permissions`, `display-autorotate`, `panel-brightness-dpcd`, `tablet-mode-switch`
+**Screen, brightness and rotation** — `accelerometer-orientation`, `backlight-permissions`, `display-autorotate`, `panel-brightness-aux`, `panel-brightness-dpcd`, `tablet-mode-switch`, `touch-resume-rebind`
 
 **Audio** — `audio-avs-dsp`
 
 **Buttons and sensors** — `ec-buttons-poll`
 
 **Login and security** — `cros-fp-fingerprint`
+
+**Booting and recovery** — `nightfall`
 
 **Android (Waydroid)** — `waydroid-lxc-hook`, `waydroid-netfilter`, `waydroid-usb`
 

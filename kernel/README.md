@@ -45,11 +45,13 @@ booted; its own commit message is honest about that, and so is this table.
 
 Two of these bear directly on fixes in this repository:
 
-- **9205** builds v4l2loopback into the kernel. `camera-follow-rotation`
-  installs `v4l2loopback-dkms` from the distro instead, because it cannot
-  assume a kernel that carries the patch. On a kernel that does, the DKMS
-  package is redundant — the fix's `modinfo v4l2loopback` check finds the
-  in-tree module and skips the install.
+- **9205** builds v4l2loopback into the kernel. Nothing in this repository
+  needs it any more: the fix that did, `camera-follow-rotation`, was removed
+  once the camera rotation problem was settled a different way (see
+  `display-autorotate`, which pins the screen to landscape while a camera app
+  is open instead of rotating the image). 9205 still earns its place for
+  Waydroid's external-camera HAL, which wants a plain V4L2 device the IPU3
+  nodes cannot provide.
 - **9207** is the one volume-button failure this repository has no answer for.
   See below.
 
