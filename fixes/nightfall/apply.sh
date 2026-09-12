@@ -4,7 +4,7 @@ SUDO="${FIXER_SUDO:-sudo}"
 
 # Where the picker's own source lives. It is a separate project, deliberately:
 # this fix installs it, it does not vendor it.
-REPO="${FIXER_PICKER_REPO:-}"
+REPO="${FIXER_NIGHTFALL_REPO:-${FIXER_PICKER_REPO:-}}"
 if [ -z "$REPO" ]; then
     # Renamed project; the old checkout name still exists on machines that
     # cloned before the rename, and GitHub redirects the old URL either way.
@@ -20,15 +20,15 @@ for cand in install-nightfall.sh install-picker.sh; do
 done
 if [ -z "$INSTALLER" ]; then
     echo "nightfall-boot-manager checkout not found (formerly nocturne-boot-picker)."
-    echo "Looked in: \$FIXER_PICKER_REPO, ~/nightfall-boot-manager,"
+    echo "Looked in: \$FIXER_NIGHTFALL_REPO, ~/nightfall-boot-manager,"
     echo "           ~/buildstuff/nightfall-boot-manager, and the pre-rename"
     echo "           ~/nocturne-boot-picker paths"
     echo
     echo "  git clone https://github.com/thewraith420/nightfall-boot-manager"
-    echo "  chromebook-fixer apply boot-picker"
+    echo "  chromebook-fixer apply nightfall"
     echo
     echo "Or point at an existing one:"
-    echo "  FIXER_PICKER_REPO=/path/to/nightfall-boot-manager chromebook-fixer apply boot-picker"
+    echo "  FIXER_NIGHTFALL_REPO=/path/to/nightfall-boot-manager chromebook-fixer apply nightfall"
     echo "Nothing was changed."
     exit 1
 fi
@@ -37,7 +37,7 @@ echo "picker source: $REPO"
 # The picker kernel is the one thing this cannot produce. Building a kernel is
 # not something this tool does, and a 1.3GHz tablet is not where you would do
 # it - so it must already exist somewhere.
-KERNEL="${FIXER_PICKER_KERNEL:-}"
+KERNEL="${FIXER_NIGHTFALL_KERNEL:-${FIXER_PICKER_KERNEL:-}}"
 if [ -z "$KERNEL" ]; then
     for c in /boot/nightfall/vmlinuz /boot/picker/vmlinuz "$REPO"/picker-kernel/vmlinuz* \
              "$HOME"/buildstuff/BobZKernel/installer-*picker*/boot/vmlinuz-*; do
@@ -48,7 +48,7 @@ if [ -z "$KERNEL" ] || [ ! -r "$KERNEL" ]; then
     echo "No picker kernel image found."
     echo "It is built from BobZKernel's picker-kernel branch, on a real machine,"
     echo "not here. Point this at the result:"
-    echo "  FIXER_PICKER_KERNEL=/path/to/vmlinuz chromebook-fixer apply boot-picker"
+    echo "  FIXER_NIGHTFALL_KERNEL=/path/to/vmlinuz chromebook-fixer apply nightfall"
     echo "Nothing was changed."
     exit 1
 fi

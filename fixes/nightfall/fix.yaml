@@ -1,4 +1,4 @@
-id: boot-picker
+id: nightfall
 category: boot
 name: Nightfall Boot Manager (touch boot, kernel install, backup)
 risk: high
@@ -57,7 +57,8 @@ danger: |
 notes: |
   Needs the nightfall-boot-manager checkout and a prebuilt picker kernel image;
   apply says exactly what is missing and where it looked. Point it explicitly
-  with FIXER_PICKER_REPO=/path and FIXER_PICKER_KERNEL=/path/to/vmlinuz.
+  with FIXER_NIGHTFALL_REPO=/path and FIXER_NIGHTFALL_KERNEL=/path/to/vmlinuz.
+  The pre-rename FIXER_PICKER_* spellings still work.
 
   The initramfs is built here at apply time, not shipped: it bundles the local
   busybox, kexec and the libraries the picker binary links against, so one

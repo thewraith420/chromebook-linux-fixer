@@ -6,7 +6,7 @@ SUDO="${FIXER_SUDO:-sudo}"
 # back to removing the same things by hand, because revert has to work on a
 # machine where the checkout has since been deleted - otherwise the only way
 # out of a boot entry is to still have the source tree that made it.
-REPO="${FIXER_PICKER_REPO:-}"
+REPO="${FIXER_NIGHTFALL_REPO:-${FIXER_PICKER_REPO:-}}"
 if [ -z "$REPO" ]; then
     for c in "$HOME/nightfall-boot-manager" "$HOME/buildstuff/nightfall-boot-manager" \
              "$HOME/nocturne-boot-picker" "$HOME/buildstuff/nocturne-boot-picker"; do
