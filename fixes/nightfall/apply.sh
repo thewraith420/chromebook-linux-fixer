@@ -84,12 +84,16 @@ if [ ! -x "$REPO/ui/picker" ]; then
     }
 fi
 
+# e2fsprogs is a newer requirement than the rest: the initramfs bundles e2fsck
+# so Nightfall's Repair menu can check the root filesystem while it is
+# unmounted, which is the one moment that check is actually safe to run.
 IMG="$REPO/initramfs/picker-initramfs.img"
 echo "building the initramfs (verifies itself at the end)..."
 ( cd "$REPO/initramfs" && ./build-initramfs.sh "$IMG" ) || {
     echo
     echo "initramfs build failed - see the message above for what was missing."
-    echo "Typically: sudo apt install busybox-static cpio gzip fakeroot kexec-tools"
+    echo "Typically: sudo apt install busybox-static cpio gzip fakeroot \\"
+    echo "                            kexec-tools e2fsprogs"
     echo "Nothing was changed."
     exit 1
 }
