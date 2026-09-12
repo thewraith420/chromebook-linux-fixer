@@ -21,7 +21,11 @@
 mod templates;
 
 use futures::future::join_all;
-use futures_util::StreamExt;
+// StreamExt comes from the futures crate, which is already a dependency and
+// re-exports it. Importing it as futures_util instead compiled nowhere: that
+// crate is pulled in transitively by futures, never declared in Cargo.toml,
+// and cargo will not let you name a transitive dependency directly.
+use futures::StreamExt;
 use log::{error, info, warn};
 use rust_fp::drivers::get_drivers;
 use rust_fp::fingerprint_driver::{
