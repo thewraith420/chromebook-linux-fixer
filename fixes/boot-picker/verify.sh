@@ -35,7 +35,7 @@ if [ -n "$MISSING" ]; then
 fi
 
 DEFAULT=$(grep -hE '^GRUB_DEFAULT=' /etc/default/grub 2>/dev/null | cut -d= -f2- | tr -d '"')
-echo "touch boot picker installed [$NAME] ($(du -h "$PICKER_DIR/vmlinuz" | cut -f1) kernel,"\
+echo "Nightfall installed [$NAME] ($(du -h "$PICKER_DIR/vmlinuz" | cut -f1) kernel,"\
      "$(du -h "$PICKER_DIR/initramfs.img" | cut -f1) initramfs)"
 case "$DEFAULT" in
     picker|nightfall) echo "and it is the default GRUB entry" ;;

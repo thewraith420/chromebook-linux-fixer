@@ -1,6 +1,6 @@
 id: boot-picker
 category: boot
-name: Touch boot picker (choose a kernel without a keyboard)
+name: Nightfall Boot Manager (touch boot, kernel install, backup)
 risk: high
 reverts_cleanly: true
 applies_to:
@@ -9,23 +9,36 @@ applies_to:
 description: |
   On a tablet with no attached keyboard, GRUB's menu cannot be navigated. The
   machine boots whatever the default entry is, and picking anything else means
-  finding a keyboard - so in practice you never pick anything else.
+  finding a keyboard - so in practice you never pick anything else. Anything
+  that goes wrong below the desktop has the same problem: no menu, no shell,
+  no way in.
 
-  Nightfall Boot Manager (formerly nocturne-boot-picker) replaces that with a
-  TWRP-style touch menu: a small
-  dedicated kernel and initramfs that GRUB hands control to, which reads the
-  live grub.cfg, draws a touch list of every kernel it finds, and kexecs into
-  the one you tap. It is not a bootloader replacement - GRUB stays completely
-  unmodified, the entry lives in /boot/grub/custom.cfg, and update-grub is
-  never run.
+  Nightfall Boot Manager (formerly nocturne-boot-picker) is a TWRP-style touch
+  environment for exactly that situation. A small dedicated kernel and
+  initramfs that GRUB hands control to, with real touch and DRM drivers, which
+  reads the live grub.cfg and gives you:
+
+    * boot any kernel it finds, by tapping it
+    * edit a kernel's command line - for one boot, or remembered for every boot
+    * set which kernel is the default
+    * install a kernel from a tarball, and remove ones you no longer want
+    * back the system up to an external drive, and restore it again
+    * a repair menu, for when the installed system will not come up
+
+  It is not a bootloader replacement. GRUB stays completely unmodified: the
+  entry lives in /boot/grub/custom.cfg, no existing entry moves, and
+  update-grub is never run. Installing and removing kernels happens with the
+  root filesystem not in use - no package manager holding locks, no running
+  kernel having its own modules replaced underneath it.
 
   Both the pre-rename and post-rename layouts are recognised, so detect,
   verify and revert keep working across that migration rather than reporting a
   working install as absent.
 
-  This fix installs it. It does not build or install any real kernel: the
-  picker discovers whatever is already in grub.cfg, so kernels you install
-  separately appear in its list on their own.
+  This fix installs Nightfall itself, and nothing else. It builds no kernel and
+  installs none: Nightfall reads the live grub.cfg, so kernels put there by
+  anything else show up on their own, and installing kernels is something you
+  then do from Nightfall rather than from here.
 danger: |
   This writes a boot entry. On a machine with no keyboard, a boot problem is
   harder to escape than usual, so read this before applying.
@@ -34,9 +47,9 @@ danger: |
   deliberate act. install-picker.sh refuses outright to run under
   GRUB_DEFAULT=saved, where booting the picker once would silently make it
   permanent. If you later set it as the default yourself, understand that a
-  broken picker image then loops until you attach a keyboard.
+  broken image then loops until you attach a keyboard.
 
-  The picker falls back to booting the first discovered kernel if the display
+  Nightfall falls back to booting the first discovered kernel if the display
   or touch fails, and on a timeout, so a failure is meant to be survivable
   rather than terminal. It has been run end-to-end on exactly one machine.
 
