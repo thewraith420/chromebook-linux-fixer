@@ -129,9 +129,11 @@ class Window(Adw.ApplicationWindow):
         # end of the list rather than as more below. Anything added to
         # CATEGORIES in lib/registry.py should be checked against this.
         #
-        # The ceiling is the Slate's own panel: 3000x2000 at ~293 PPI is 2x
-        # scaled to ~1500x1000 logical, so this has to stay under ~960 once the
-        # top bar is taken off.
+        # The ceiling is the Slate's own panel. Measured rather than assumed:
+        # mode 3000x2000 at scale 1.6666 (not 2x, which is the obvious guess at
+        # ~293 PPI) gives 1800x1200 logical, so ~1165 usable once the top bar
+        # is off. 900 clears that comfortably; check it again if the display
+        # scale changes, since that is what moves this limit, not the panel.
         super().__init__(application=app, title="Chromebook Fixer",
                          default_width=760, default_height=900)
         self.machine = Machine.detect()
