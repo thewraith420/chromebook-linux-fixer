@@ -16,7 +16,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "lib"))
@@ -129,21 +129,8 @@ class Window(Adw.ApplicationWindow):
     """
 
     def __init__(self, app):
-        # Height is sized to the category list, which is the first thing shown:
-        # eight rows at ~64px plus the machine group, headings and margins comes
-        # to roughly 850. 720 fit when there were seven categories and quietly
-        # started clipping the last one when "Booting and recovery" was added -
-        # the page scrolls, so nothing breaks, but a cut-off row reads as the
-        # end of the list rather than as more below. Anything added to
-        # CATEGORIES in lib/registry.py should be checked against this.
-        #
-        # The ceiling is the Slate's own panel. Measured rather than assumed:
-        # mode 3000x2000 at scale 1.6666 (not 2x, which is the obvious guess at
-        # ~293 PPI) gives 1800x1200 logical, so ~1165 usable once the top bar
-        # is off. 900 clears that comfortably; check it again if the display
-        # scale changes, since that is what moves this limit, not the panel.
         super().__init__(application=app, title="Chromebook Fixer",
-                         default_width=760, default_height=900)
+                         default_width=760, default_height=self._fit_height())
         self.machine = Machine.detect()
         self.rows = []              # every FixRow, for refreshing
         self.category_rows = {}     # category key -> (row, fixes)
@@ -154,6 +141,36 @@ class Window(Adw.ApplicationWindow):
         self.set_content(self.toasts)
 
         GLib.idle_add(self.refresh_all)
+
+    @staticmethod
+    def _fit_height(fallback=900):
+        """
+        Pick a window height from the screen, not from a count of rows.
+
+        This has now been hand-tuned twice - 720 when there were seven
+        categories, 900 when "Booting and recovery" made eight - and gone stale
+        both times, the second within a day, because adding anything to the
+        page silently invalidates the number. A row sliced by the window edge
+        reads as the end of the list rather than as more below it, which is the
+        one thing a list of what your machine needs must not do.
+
+        So: ask the monitor. On a tablet the screen also turns, so the answer
+        differs by orientation - this panel is 1800x1200 logical in landscape
+        and 1200x1800 in portrait, and 88% of the landscape height left only
+        about 50px of slack against the current page. 92% leaves room for the
+        top bar without cutting it that fine; the floor keeps it usable on
+        something small, and the ceiling stops it becoming absurd on a large
+        display where the content does not need the room.
+        The page scrolls either way, so being wrong is now cosmetic rather than
+        a thing that hides content, and nobody has to remember this exists when
+        they add a row.
+        """
+        try:
+            monitors = Gdk.Display.get_default().get_monitors()
+            geometry = monitors.get_item(0).get_geometry()
+            return max(600, min(1300, int(geometry.height * 0.92)))
+        except Exception:                                  # noqa: BLE001
+            return fallback
 
     # -- level 1: the categories -------------------------------------------
 
