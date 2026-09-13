@@ -130,7 +130,7 @@ class Window(Adw.ApplicationWindow):
 
     def __init__(self, app):
         super().__init__(application=app, title="Chromebook Fixer",
-                         default_width=760, default_height=self._fit_height())
+                         default_width=760, default_height=self._screen_cap_height())
         self.machine = Machine.detect()
         self.rows = []              # every FixRow, for refreshing
         self.category_rows = {}     # category key -> (row, fixes)
@@ -139,31 +139,17 @@ class Window(Adw.ApplicationWindow):
         self.nav.add(self._build_root())
         self.toasts = Adw.ToastOverlay(child=self.nav)
         self.set_content(self.toasts)
+        # Now that the page exists, open as tall as it actually is.
+        self.set_default_size(760, self._fit_to_content())
 
         GLib.idle_add(self.refresh_all)
 
     @staticmethod
-    def _fit_height(fallback=900):
+    def _screen_cap_height(fallback=900):
         """
-        Pick a window height from the screen, not from a count of rows.
-
-        This has now been hand-tuned twice - 720 when there were seven
-        categories, 900 when "Booting and recovery" made eight - and gone stale
-        both times, the second within a day, because adding anything to the
-        page silently invalidates the number. A row sliced by the window edge
-        reads as the end of the list rather than as more below it, which is the
-        one thing a list of what your machine needs must not do.
-
-        So: ask the monitor. On a tablet the screen also turns, so the answer
-        differs by orientation - this panel is 1800x1200 logical in landscape
-        and 1200x1800 in portrait, and 88% of the landscape height left only
-        about 50px of slack against the current page. 92% leaves room for the
-        top bar without cutting it that fine; the floor keeps it usable on
-        something small, and the ceiling stops it becoming absurd on a large
-        display where the content does not need the room.
-        The page scrolls either way, so being wrong is now cosmetic rather than
-        a thing that hides content, and nobody has to remember this exists when
-        they add a row.
+        The tallest this window should ever open: 92% of the monitor, so it
+        never runs off a screen that has turned. A ceiling, not a size - see
+        _fit_to_content for why.
         """
         try:
             monitors = Gdk.Display.get_default().get_monitors()
@@ -171,6 +157,42 @@ class Window(Adw.ApplicationWindow):
             return max(600, min(1300, int(geometry.height * 0.92)))
         except Exception:                                  # noqa: BLE001
             return fallback
+
+    def _fit_to_content(self):
+        """
+        Open exactly as tall as the root page needs, up to the screen's cap.
+
+        Third attempt, and the first that measures the right thing. A constant
+        went stale twice as rows were added - 720, then 900, each cutting off
+        the last category. Replacing it with 92% of the screen fixed "too
+        small" and produced "too big": this tablet held in portrait gets 1300px
+        for about 1000px of content. Both sized the window from something other
+        than what is in it.
+
+        So measure the groups actually on the page, and take the larger of
+        their sum and the page's own report. Adwaita's preferences page scrolls
+        internally, so its natural height can come back as the scroller's
+        rather than the content's; the groups themselves do not scroll, so
+        their sum is the reliable half. Groups are measured narrower than the
+        window because the page clamps them - measuring wide would under-count
+        the lines their descriptions wrap onto. Adding a row changes the answer
+        on its own; turning the screen changes the cap.
+        """
+        cap = self._screen_cap_height()
+        try:
+            def natural(widget, width):
+                return widget.measure(Gtk.Orientation.VERTICAL, width)[1]
+            groups = sum(natural(g, 560) for g in self._root_groups)
+            # Adwaita spaces groups apart and pads the page; allow for that
+            # rather than reaching into the private box that holds them.
+            body = max(natural(self._root_page, 760),
+                       groups + 24 * len(self._root_groups) + 48)
+            want = natural(self._root_header, 760) + body
+            if want > 200:                     # a failed measure reads as ~0
+                return max(600, min(cap, want))
+        except Exception:                                  # noqa: BLE001
+            pass
+        return cap
 
     # -- level 1: the categories -------------------------------------------
 
@@ -198,17 +220,27 @@ class Window(Adw.ApplicationWindow):
             fixes = [f for f in applicable if f.category == key]
             if not fixes:
                 continue
-            row = Adw.ActionRow(title=label, activatable=True)
+            # A subtitle from the start, not only once refresh_all fills it in.
+            # The window is sized by measuring this page before anything has
+            # been checked, and a row without a subtitle is shorter - eight of
+            # them measured bare would open the window too short once the
+            # counts arrive.
+            row = Adw.ActionRow(title=label, subtitle="checking…", activatable=True)
             row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
             row.connect("activated",
                         lambda _r, k=key, l=label: self._open_category(k, l))
             group.add(row)
             self.category_rows[key] = (row, fixes)
         page.add(group)
-        page.add(self._build_boot_timeouts())
+        boot = self._build_boot_menu()
+        page.add(boot)
+        # Kept so the window can be sized from what is actually on the page.
+        self._root_page = page
+        self._root_groups = [info, group, boot]
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
+        self._root_header = header
         refresh = Gtk.Button(icon_name="view-refresh-symbolic",
                              tooltip_text="Re-check everything")
         refresh.connect("clicked", lambda _b: self.refresh_all())
@@ -239,9 +271,36 @@ class Window(Adw.ApplicationWindow):
 
     # -- summaries ----------------------------------------------------------
 
-    # -- boot menu timeouts ------------------------------------------------
+    # -- boot menus --------------------------------------------------------
 
     NF_TIMEOUT_FILE = "/boot/nightfall-timeout"
+    NF_ROTATE_FILE = "/boot/nightfall-rotate"
+    NF_AUTOROTATE_FILE = "/boot/nightfall-autorotate"
+    NF_DEFAULT_TIMEOUT = 30      # DEFAULT_TIMEOUT_SECS in ui/nightfall.c, 34cb3bc
+    NF_DEFAULT_ROTATE = "270"    # init: ': "${NIGHTFALL_ROTATE:=270}"'
+    ROTATIONS = ("0", "90", "180", "270")
+
+    @staticmethod
+    def _first_line(path):
+        """
+        A file's first line as Nightfall's init reads it - `read -r` with the
+        default IFS strips surrounding spaces, tabs and the newline, and
+        nothing else. None when there is no such file.
+
+        Every value in this group is what Nightfall will USE, not what its
+        file says. Nightfall ignores a file it cannot parse, so showing the
+        raw contents of a garbage file would describe a setting not in effect.
+        """
+        try:
+            with open(path) as f:
+                return f.readline().strip(" \t\n")
+        except OSError:
+            return None
+
+    @staticmethod
+    def _source_note(source):
+        return {"file": "", "default": " (default)",
+                "ignored": " (default - the file on /boot was not valid)"}[source]
 
     @staticmethod
     def _grub_timeout():
@@ -256,29 +315,57 @@ class Window(Adw.ApplicationWindow):
 
     @classmethod
     def _nightfall_timeout(cls):
-        try:
-            return int(open(cls.NF_TIMEOUT_FILE).readline().strip())
-        except (OSError, ValueError):
-            return None
+        v = cls._first_line(cls.NF_TIMEOUT_FILE)
+        if v is None:
+            return cls.NF_DEFAULT_TIMEOUT, "default"
+        # Digits only and at most 3600, as init checks. The previous int()
+        # accepted "-5" and "4000" and displayed them as the setting, when
+        # Nightfall ignores both and uses its default.
+        if v.isascii() and v.isdigit() and int(v) <= 3600:
+            return int(v), "file"
+        return cls.NF_DEFAULT_TIMEOUT, "ignored"
 
-    def _build_boot_timeouts(self):
+    @classmethod
+    def _nightfall_rotation(cls):
+        v = cls._first_line(cls.NF_ROTATE_FILE)
+        if v is None:
+            return cls.NF_DEFAULT_ROTATE, "default"
+        return (v, "file") if v in cls.ROTATIONS else (cls.NF_DEFAULT_ROTATE, "ignored")
+
+    @classmethod
+    def _nightfall_autorotate(cls):
+        v = cls._first_line(cls.NF_AUTOROTATE_FILE)
+        if v is None:
+            return True, "default"
+        if v in ("1", "on"):
+            return True, "file"
+        if v in ("0", "off"):
+            return False, "file"
+        return True, "ignored"          # garbage keeps auto-rotate on
+
+    def _build_boot_menu(self):
         """
-        How long each boot menu waits. Two rows, not one: the value that
-        strands you differs between them. GRUB's 0 means no menu and boots
-        immediately; Nightfall's 0 disables auto-boot and waits for a tap
-        forever, which on a tablet whose touchscreen may be the broken part is
-        the unrecoverable one.
+        What each boot menu does on its own.
+
+        Timeouts are two rows, not one: the value that strands you differs.
+        GRUB's 0 means no menu and boots immediately; Nightfall's 0 disables
+        auto-boot and waits for a tap forever, which on a tablet whose
+        touchscreen may be the broken part is the unrecoverable one.
+
+        Rotation and auto-rotate are separate rows because they interact. With
+        auto-rotate on, the starting rotation only lasts until the first
+        accelerometer reading; with it off, it is where Nightfall stays. The
+        rotation row's subtitle says which of those is in effect.
         """
         group = Adw.PreferencesGroup(
             title="Boot menus",
-            description="How long each menu waits before deciding for you. "
+            description="What each boot menu does on its own. "
                         "Takes effect on the next boot.")
         self.timeout_rows = []
-        # (key, title, minimum, what an absent/edge value means)
         for key, title, low, note in (
-            ("grub", "GRUB menu", -1,
+            ("grub", "GRUB menu timeout", -1,
              "-1 waits forever; 0 skips the menu entirely"),
-            ("nightfall", "Nightfall menu", 0,
+            ("nightfall", "Nightfall menu timeout", 0,
              "0 never auto-boots - it waits for a tap forever"),
         ):
             row = Adw.ActionRow(title=title, subtitle=note)
@@ -293,28 +380,74 @@ class Window(Adw.ApplicationWindow):
             row.add_suffix(box)
             group.add(row)
             self.timeout_rows.append((key, row, spin, note))
-        self._refresh_timeouts()
+
+        # Chosen and then Set, like the timeouts, rather than applied on
+        # change: every change is an authentication prompt, and refreshing
+        # the rows moves these controls programmatically - applying on change
+        # would turn every refresh into a write.
+        self.rotate_row = Adw.ComboRow(
+            title="Nightfall starting rotation",
+            model=Gtk.StringList.new([f"{r}°" for r in self.ROTATIONS]))
+        rot_set = Gtk.Button(label="Set", valign=Gtk.Align.CENTER)
+        rot_set.connect("clicked", lambda _b: self._run_boot_menu(
+            "rotate", self.ROTATIONS[self.rotate_row.get_selected()]))
+        self.rotate_row.add_suffix(rot_set)
+        group.add(self.rotate_row)
+
+        self.autorotate_row = Adw.ComboRow(
+            title="Nightfall auto-rotate",
+            model=Gtk.StringList.new(["On", "Off"]))
+        auto_set = Gtk.Button(label="Set", valign=Gtk.Align.CENTER)
+        auto_set.connect("clicked", lambda _b: self._run_boot_menu(
+            "autorotate", ("on", "off")[self.autorotate_row.get_selected()]))
+        self.autorotate_row.add_suffix(auto_set)
+        group.add(self.autorotate_row)
+
+        self._refresh_boot_menu()
         return group
 
-    def _refresh_timeouts(self):
+    def _refresh_boot_menu(self):
         for key, row, spin, note in getattr(self, "timeout_rows", []):
-            value = (self._grub_timeout() if key == "grub"
-                     else self._nightfall_timeout())
-            if value is None:
-                row.set_subtitle(f"using the built-in default — {note}")
-                # Do not leave the spinner reading 0 when the real setting is
-                # "unset": 0 is a meaningful and, for Nightfall, dangerous
-                # value, and a control that displays it looks like it is set.
-                spin.set_value(30 if key == "nightfall" else 5)
+            if key == "grub":
+                value = self._grub_timeout()
+                row.set_subtitle(f"{value}s — {note}" if value is not None
+                                 else f"unset — {note}")
+                spin.set_value(5 if value is None else value)
             else:
-                row.set_subtitle(f"{value}s — {note}")
+                value, source = self._nightfall_timeout()
+                row.set_subtitle(f"{value}s{self._source_note(source)} — {note}")
+                # Parks on the value in effect, never on 0 for "unset": 0 is a
+                # real and, for Nightfall, dangerous setting.
                 spin.set_value(value)
+
+        if not hasattr(self, "rotate_row"):
+            return
+        rot, rsource = self._nightfall_rotation()
+        auto, asource = self._nightfall_autorotate()
+        self.rotate_row.set_selected(self.ROTATIONS.index(rot))
+        self.autorotate_row.set_selected(0 if auto else 1)
+        if auto:
+            self.rotate_row.set_subtitle(
+                f"starts at {rot}°{self._source_note(rsource)} — auto-rotate "
+                f"takes over within about 750ms")
+            self.autorotate_row.set_subtitle(
+                f"on{self._source_note(asource)} — follows the accelerometer")
+        else:
+            self.rotate_row.set_subtitle(
+                f"stays at {rot}°{self._source_note(rsource)} — auto-rotate "
+                f"is off, so this pins it")
+            self.autorotate_row.set_subtitle(
+                f"off{self._source_note(asource)} — Nightfall keeps its "
+                f"starting rotation")
+
+    def _run_boot_menu(self, flag, value, extra=()):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        cmd = [cli, "--no-colour", "boot-menu", f"--{flag}", str(value), *extra]
+        self._run_in_window(f"boot-menu {flag}", cmd,
+                            stream=False, refresh_after=True)
 
     def _set_timeout(self, key, spin):
         value = int(spin.get_value())
-        cli = str(REPO / "bin" / "chromebook-fixer")
-        cmd = [cli, "--no-colour", "boot-timeout", f"--{key}", str(value)]
-
         if key == "nightfall" and value == 0:
             # The CLI refuses this without -y. Ask the same question here
             # rather than passing -y silently, and say what it actually does -
@@ -334,16 +467,14 @@ class Window(Adw.ApplicationWindow):
             dialog.set_default_response("cancel")
             dialog.set_close_response("cancel")
             dialog.connect("response", lambda _d, r: (
-                self._run_in_window(f"boot-timeout {key}", cmd + ["--yes"],
-                                    stream=False, refresh_after=True)
+                self._run_boot_menu(key, value, ("--yes",))
                 if r == "go" else None))
             dialog.present()
             return
-        self._run_in_window(f"boot-timeout {key}", cmd,
-                            stream=False, refresh_after=True)
+        self._run_boot_menu(key, value)
 
     def refresh_all(self):
-        self._refresh_timeouts()
+        self._refresh_boot_menu()
         # Rows on any pushed page.
         for row in self.rows:
             row.refresh()
