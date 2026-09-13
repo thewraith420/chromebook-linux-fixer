@@ -83,6 +83,14 @@ class FixRow(Adw.ExpanderRow):
         self.revert_btn.connect("clicked", lambda _b: window.run_action("revert", fix))
         box.append(self.apply_btn)
         box.append(self.revert_btn)
+        # Only for fixes that keep one. Nightfall is the only one today, but
+        # this asks the fix rather than naming it, so another that grows a
+        # logs.sh gets the button without touching the GUI.
+        if fix.has("logs"):
+            logs_btn = Gtk.Button(label="Logs")
+            logs_btn.set_tooltip_text("Show this fix's own diagnostic log")
+            logs_btn.connect("clicked", lambda _b: window.view_logs(fix))
+            box.append(logs_btn)
         actions.add_suffix(box)
         self.add_row(actions)
 
@@ -269,9 +277,29 @@ class Window(Adw.ApplicationWindow):
         dialog.present()
 
     def _execute(self, action, fix):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        self._run_in_window(f"{action} {fix.id}",
+                            [cli, "--no-colour", action, fix.id, "--yes"])
+
+    def view_logs(self, fix):
+        """
+        Show a fix's own log.
+
+        Read in one go rather than streamed. Streaming is right for apply,
+        which is slow and where watching it matters; a log is already written,
+        and Nightfall's runs past a thousand lines - pushing those through the
+        main loop one idle callback at a time is visibly slow on the hardware
+        this runs on.
+        """
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        self._run_in_window(f"logs {fix.id}",
+                            [cli, "--no-colour", "logs", fix.id],
+                            stream=False, refresh_after=False)
+
+    def _run_in_window(self, title, cmd, stream=True, refresh_after=True):
         win = Adw.Window(transient_for=self, modal=True,
                          default_width=680, default_height=440,
-                         title=f"{action} {fix.id}")
+                         title=title)
         tv = Adw.ToolbarView()
         tv.add_top_bar(Adw.HeaderBar())
         buf = Gtk.TextBuffer()
@@ -289,8 +317,6 @@ class Window(Adw.ApplicationWindow):
             buf.insert(buf.get_end_iter(), text)
             return False
 
-        cli = str(REPO / "bin" / "chromebook-fixer")
-        cmd = [cli, "--no-colour", action, fix.id, "--yes"]
         append(f"$ {' '.join(cmd)}\n\n")
 
         def worker():
@@ -298,14 +324,20 @@ class Window(Adw.ApplicationWindow):
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, env=askpass_env())
-                for line in proc.stdout:
-                    GLib.idle_add(append, line)
-                proc.wait()
+                if stream:
+                    for line in proc.stdout:
+                        GLib.idle_add(append, line)
+                    proc.wait()
+                else:
+                    out = proc.stdout.read()
+                    proc.wait()
+                    GLib.idle_add(append, out)
                 GLib.idle_add(append, f"\n[finished, exit {proc.returncode}]\n")
             except Exception as exc:                      # noqa: BLE001
                 GLib.idle_add(append, f"\nfailed to run: {exc}\n")
             GLib.idle_add(close.set_sensitive, True)
-            GLib.idle_add(self.refresh_all)
+            if refresh_after:
+                GLib.idle_add(self.refresh_all)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
