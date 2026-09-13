@@ -53,6 +53,7 @@ fetch "$CROSEC_REPO" "$CROSEC_COMMIT" crosec-rs
 
 echo "applying fixes..."
 git -C "$BUILD/crosec-rs" apply "$FIX_DIR/patches/crosec-chunking-fix.patch"
+git -C "$BUILD/crosec-rs" apply "$FIX_DIR/patches/crosec-never-type-fallback.patch"
 git -C "$BUILD/rust-fp"   apply "$FIX_DIR/patches/rustfp-upload-retry.patch"
 
 # -- the bridge itself -----------------------------------------------------
