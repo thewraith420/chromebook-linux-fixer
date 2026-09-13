@@ -231,7 +231,7 @@ def _run_one(fix, action, c, assume_yes=False):
     return code
 
 
-def cmd_boot_timeout(args, c):
+def cmd_boot_menu(args, c):
     """
     Read or set how long each boot menu waits.
 
@@ -240,7 +240,7 @@ def cmd_boot_timeout(args, c):
     while Nightfall's 0 disables auto-boot and waits forever, which on a
     machine whose touchscreen may be the broken part is the unrecoverable one.
     """
-    script = Path(__file__).resolve().parent.parent / "lib" / "boot-timeout.sh"
+    script = Path(__file__).resolve().parent.parent / "lib" / "boot-menu.sh"
     if not os.access(script, os.X_OK):
         print(c(f"missing {script}", RED))
         return 2
@@ -254,14 +254,15 @@ def cmd_boot_timeout(args, c):
         env["FIXER_YES"] = "1"
 
     worst = 0
-    for which in ("grub", "nightfall"):
+    settings = ("grub", "nightfall", "rotate", "autorotate")
+    for which in settings:
         value = getattr(args, which)
         if value is None:
             continue
         sys.stdout.flush()
         worst = max(worst, subprocess.call([str(script), which, value], env=env))
 
-    if args.grub is None and args.nightfall is None:
+    if all(getattr(args, w) is None for w in settings):
         sys.stdout.flush()
         return subprocess.call([str(script), "show"], env=env)
     if worst == 0:
@@ -416,12 +417,18 @@ def main():
 
     sub.add_parser("status", help="what this machine needs")
 
-    pt = sub.add_parser("boot-timeout",
-                        help="how long each boot menu waits before deciding")
+    pt = sub.add_parser("boot-menu", aliases=["boot-timeout"],
+                        help="what the boot menus do on their own: timeouts, "
+                             "Nightfall's rotation")
     pt.add_argument("--grub", metavar="SECS",
                     help="GRUB's menu timeout (0 = no menu, -1 = wait forever)")
     pt.add_argument("--nightfall", metavar="SECS",
                     help="Nightfall's menu timeout (0 = never auto-boot)")
+    pt.add_argument("--rotate", choices=["0", "90", "180", "270"],
+                    help="Nightfall's STARTING rotation (with auto-rotate on, "
+                         "only until the first accelerometer reading)")
+    pt.add_argument("--autorotate", choices=["on", "off"],
+                    help="whether Nightfall follows the accelerometer")
     pt.add_argument("-y", "--yes", action="store_true",
                     help="accept a timeout that can strand a keyboardless machine")
 
@@ -459,8 +466,9 @@ def main():
 
     if args.command == "status":
         return cmd_status(args, machine, fixes, c)
-    if args.command == "boot-timeout":
-        return cmd_boot_timeout(args, c)
+    # argparse records whichever name was typed, so the alias arrives as itself.
+    if args.command in ("boot-menu", "boot-timeout"):
+        return cmd_boot_menu(args, c)
     if args.command == "logs":
         return cmd_logs(args, fixes, c)
     if args.command == "selftest":
