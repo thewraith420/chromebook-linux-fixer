@@ -30,6 +30,8 @@ if [ -z "$INSTALLER" ]; then
     echo "Or point at an existing one:"
     echo "  FIXER_NIGHTFALL_REPO=/path/to/nightfall-boot-manager chromebook-fixer apply nightfall"
     echo "Nothing was changed."
+    # No checkout is "cannot check here", not "the source is broken".
+    [ -n "${FIXER_BUILD_ONLY:-}" ] && exit 2
     exit 1
 fi
 echo "picker source: $REPO"
@@ -37,14 +39,18 @@ echo "picker source: $REPO"
 # The picker kernel is the one thing this cannot produce. Building a kernel is
 # not something this tool does, and a 1.3GHz tablet is not where you would do
 # it - so it must already exist somewhere.
+# Under a build check the kernel is irrelevant: it is copied at install time,
+# never compiled, and the two things that CAN rot - the LVGL UI and the
+# initramfs - build without it. Demanding it here would make the check
+# impossible on any machine that has not already installed Nightfall.
 KERNEL="${FIXER_NIGHTFALL_KERNEL:-${FIXER_PICKER_KERNEL:-}}"
-if [ -z "$KERNEL" ]; then
+if [ -z "$KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
     for c in /boot/nightfall/vmlinuz /boot/picker/vmlinuz "$REPO"/picker-kernel/vmlinuz* \
              "$HOME"/buildstuff/BobZKernel/installer-*picker*/boot/vmlinuz-*; do
         [ -r "$c" ] && { KERNEL="$c"; break; }
     done
 fi
-if [ -z "$KERNEL" ] || [ ! -r "$KERNEL" ]; then
+if { [ -z "$KERNEL" ] || [ ! -r "$KERNEL" ]; } && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
     echo "No picker kernel image found."
     echo "It is built from BobZKernel's picker-kernel branch, on a real machine,"
     echo "not here. Point this at the result:"
@@ -52,14 +58,18 @@ if [ -z "$KERNEL" ] || [ ! -r "$KERNEL" ]; then
     echo "Nothing was changed."
     exit 1
 fi
-echo "picker kernel: $KERNEL"
+if [ -n "$KERNEL" ]; then
+    echo "picker kernel: $KERNEL"
+else
+    echo "picker kernel: not needed for a build check"
+fi
 
 # Reinstalling (to pick up a rebuilt initramfs) finds the kernel already in
 # place, and install-picker.sh copies its argument to exactly that path - cp
 # refuses to copy a file onto itself and the whole install aborts partway.
 # Hand it a copy instead, so the common "rebuild the initramfs" case works.
 TMPDIR_PICKER=""
-KREAL=$(readlink -f "$KERNEL")
+KREAL=$([ -n "$KERNEL" ] && readlink -f "$KERNEL" || echo "")
 if [ "$KREAL" = /boot/nightfall/vmlinuz ] || [ "$KREAL" = /boot/picker/vmlinuz ]; then
     TMPDIR_PICKER=$(mktemp -d)
     trap 'rm -rf "$TMPDIR_PICKER"' EXIT
@@ -87,6 +97,22 @@ fi
 # e2fsprogs is a newer requirement than the rest: the initramfs bundles e2fsck
 # so Nightfall's Repair menu can check the root filesystem while it is
 # unmounted, which is the one moment that check is actually safe to run.
+# Under a build check, missing tools mean "cannot check here", not "the source
+# is broken" - and build-initramfs.sh exits 1 for both, so ask first. Same
+# distinction ipu3-camera makes: a check that reports failure on a machine
+# simply lacking kexec is one people stop believing.
+if [ -n "${FIXER_BUILD_ONLY:-}" ]; then
+    MISSING=""
+    for c in busybox cpio gzip fakeroot kexec e2fsck; do
+        command -v "$c" >/dev/null 2>&1 || MISSING="$MISSING $c"
+    done
+    if [ -n "$MISSING" ]; then
+        echo "build-only: cannot check the initramfs, missing:$MISSING"
+        echo "  sudo apt install busybox-static cpio gzip fakeroot kexec-tools e2fsprogs"
+        exit 2
+    fi
+fi
+
 IMG="$REPO/initramfs/picker-initramfs.img"
 echo "building the initramfs (verifies itself at the end)..."
 ( cd "$REPO/initramfs" && ./build-initramfs.sh "$IMG" ) || {
@@ -98,6 +124,17 @@ echo "building the initramfs (verifies itself at the end)..."
     exit 1
 }
 [ -r "$IMG" ] || { echo "initramfs was not produced at $IMG"; exit 1; }
+
+# Build-only: the UI and the initramfs are the parts that can rot here -
+# Nightfall pins upstream LVGL and its initramfs bundles this machine's
+# busybox, kexec, e2fsck and the libraries ui/nightfall links against, any of
+# which can move underneath it. Both are built above, unprivileged, and
+# build-initramfs.sh verifies its own output. Stop before the install.
+if [ -n "${FIXER_BUILD_ONLY:-}" ]; then
+    echo "build-only: built $(du -h "$IMG" | cut -f1) initramfs at $IMG;"
+    echo "nothing installed and no boot configuration touched"
+    exit 0
+fi
 
 # One escalation for the whole privileged part. Under the GUI $SUDO is pkexec,
 # whose polkit action is auth_admin rather than auth_admin_keep - no credential

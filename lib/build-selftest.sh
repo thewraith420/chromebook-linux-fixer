@@ -36,6 +36,7 @@ buildable() {
     case "$1" in
         cros-fp-fingerprint) echo "apply" ;;
         ipu3-camera)         echo "build.sh ${FIXER_ISP_MODE:-hardware}" ;;
+        nightfall)           echo "apply" ;;
         *)                   return 1 ;;
     esac
 }
