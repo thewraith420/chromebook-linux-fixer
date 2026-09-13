@@ -12,7 +12,13 @@ RUSTFP_COMMIT=2d0b547
 CROSEC_REPO=https://github.com/ChocolateLoverRaj/crosec-rs
 CROSEC_COMMIT=b67daa7
 
-[ -e /dev/cros_fp ] || { echo "no /dev/cros_fp on this machine"; exit 1; }
+# Whether the hardware is here decides whether to INSTALL, not whether the
+# source compiles - and "does this still compile" is a question worth asking on
+# any machine, including one with no fingerprint reader. Under FIXER_BUILD_ONLY
+# the run stops before the install anyway.
+if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+    [ -e /dev/cros_fp ] || { echo "no /dev/cros_fp on this machine"; exit 1; }
+fi
 
 # -- toolchain -------------------------------------------------------------
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -23,6 +29,10 @@ if ! command -v cargo >/dev/null; then
     echo "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
     echo
     echo "then re-run this fix."
+    # 2, not 1, under a build check: a missing toolchain is "cannot tell
+    # whether this still builds", which is not the same as "it does not".
+    # Same 0/1/2 split the detect scripts use.
+    [ -n "${FIXER_BUILD_ONLY:-}" ] && exit 2
     exit 1
 fi
 
@@ -58,6 +68,16 @@ echo "building (a few minutes on a slow machine)..."
 
 BIN="$BUILD/shim/target/release/fprintd-shim"
 [ -x "$BIN" ] || { echo "build produced no binary"; exit 1; }
+
+# Build-only: everything above this line is the real build, unprivileged and
+# with no effect on the installed system. Stopping here answers "does this
+# still compile" without touching anything - which is the question that
+# matters after a restore, when every from-source fix has to build again on a
+# fresh system and nothing has checked that they still can.
+if [ -n "${FIXER_BUILD_ONLY:-}" ]; then
+    echo "build-only: compiled $BIN; nothing installed"
+    exit 0
+fi
 
 # -- install ---------------------------------------------------------------
 $SUDO install -d /usr/local/libexec

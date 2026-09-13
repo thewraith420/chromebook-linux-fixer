@@ -26,15 +26,42 @@ esac
 # --- build dependencies ------------------------------------------------------
 # A fresh install has none of the toolchain. Install it explicitly (an explicit
 # list does not depend on deb-src being enabled, which it usually is not).
-if ! command -v meson >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1 \
-   || ! command -v curl >/dev/null 2>&1; then
+APT_DEPS="meson ninja-build build-essential pkg-config git curl ca-certificates
+          python3-yaml python3-jinja2 python3-ply
+          libgnutls28-dev openssl libssl-dev libyaml-dev libudev-dev
+          libevent-dev libdrm-dev"
+
+# What is actually missing, asked of the things meson will ask for.
+#
+# This used to be gated on "is meson, ninja or curl absent" - which does not
+# imply anything about the LIBRARIES. A machine with meson installed for some
+# other project skipped the dependency install entirely and then failed at
+# configure, and until this commit that failure printed nothing at all. Ask
+# pkg-config the same questions meson does instead.
+missing_build_deps() {
+    local miss=""
+    for c in meson ninja curl pkg-config; do
+        command -v "$c" >/dev/null 2>&1 || miss="$miss $c"
+    done
+    for m in gnutls libevent_pthreads yaml-0.1 libudev libdrm; do
+        pkg-config --exists "$m" 2>/dev/null || miss="$miss $m"
+    done
+    echo "${miss# }"
+}
+
+MISSING=$(missing_build_deps)
+if [ -n "$MISSING" ]; then
+    if [ -n "${FIXER_BUILD_ONLY:-}" ]; then
+        # A build check must not install packages as a side effect of being
+        # run, and "deps absent" is not evidence the source is broken - so 2,
+        # meaning could-not-check, rather than 1.
+        echo "build-only: cannot check, missing build dependencies: $MISSING"
+        echo "  sudo apt install $(echo $APT_DEPS)"
+        exit 2
+    fi
     echo "Installing build tools + libcamera build dependencies..."
     $SUDO apt-get update
-    $SUDO apt-get install -y --no-install-recommends \
-        meson ninja-build build-essential pkg-config git curl ca-certificates \
-        python3-yaml python3-jinja2 python3-ply \
-        libgnutls28-dev openssl libssl-dev libyaml-dev libudev-dev \
-        libevent-dev libdrm-dev
+    $SUDO apt-get install -y --no-install-recommends $APT_DEPS
 fi
 
 mkdir -p "$WORK"
@@ -65,12 +92,34 @@ if [ ! -d libcamera-src ]; then
 fi
 cd libcamera-src
 
-# --- patch (idempotent) -------------------------------------------------------
-if ! patch -p1 --dry-run --reverse --force < "$PATCH" >/dev/null 2>&1; then
-    echo "Applying libcamera patches..."
-    patch -p1 < "$PATCH" || { echo "patch failed"; exit 1; }
-else
+# --- patch --------------------------------------------------------------------
+# The reverse dry-run only recognises a FULLY applied patch. A partially
+# patched tree - what an interrupted build leaves behind - fails it, so the
+# forward apply then runs against hunks that are already in, prompts
+# "Apply anyway?", and dies. The cache is poisoned from then on and every
+# retry fails the same way, which is a miserable thing to meet while
+# restoring a machine.
+#
+# So do not try to reason about the tree's state: if the patch does not apply
+# cleanly to it, throw it away and unpack the tarball again. The tarball is
+# local and checksummed by this point, so that costs a second and makes the
+# whole step idempotent by construction rather than by inspection.
+if patch -p1 --dry-run --reverse --force < "$PATCH" >/dev/null 2>&1; then
     echo "Patches already applied."
+elif patch -p1 --dry-run --forward --force < "$PATCH" >/dev/null 2>&1; then
+    echo "Applying libcamera patches..."
+    patch -p1 --forward < "$PATCH" || { echo "patch failed"; exit 1; }
+else
+    echo "Source tree is not in a state these patches apply to; re-unpacking."
+    cd "$WORK"
+    rm -rf libcamera-src src-tmp && mkdir src-tmp
+    tar -xzf "$LC_TARBALL" -C src-tmp
+    DIR=$(find src-tmp -maxdepth 1 -type d -name 'libcamera*' | head -1)
+    [ -n "$DIR" ] || { echo "could not find unpacked source"; exit 1; }
+    mv "$DIR" libcamera-src && rm -rf src-tmp
+    cd libcamera-src
+    echo "Applying libcamera patches..."
+    patch -p1 --forward < "$PATCH" || { echo "patch failed"; exit 1; }
 fi
 
 # --- configure + build --------------------------------------------------------
@@ -84,10 +133,32 @@ meson setup "$BUILD" \
     -Dcam=enabled -Dv4l2=true \
     -Dgstreamer=disabled -Dqcam=disabled -Dpycamera=disabled \
     -Ddocumentation=disabled -Dtest=false -Dlc-compliance=disabled \
-    -Dtracing=disabled -Dwerror=false --buildtype=release >/dev/null
+    -Dtracing=disabled -Dwerror=false --buildtype=release \
+    >"$WORK/meson-setup.log" 2>&1 || {
+        # meson reports on stdout, so ">/dev/null" here used to swallow the
+        # reason entirely and set -e exited with no output at all. A configure
+        # failure - almost always a missing build dependency - is the most
+        # likely way this step fails and was the least explained.
+        echo "meson setup failed. Last 20 lines:"
+        sed 's/^/    /' "$WORK/meson-setup.log" | tail -20
+        echo "  full log: $WORK/meson-setup.log"
+        exit 1
+    }
 
 echo "Building with $JOBS job(s). This takes 10-30 minutes on this class of CPU..."
-ninja -C "$BUILD" -j"$JOBS" || { echo "build failed; nothing was installed"; exit 1; }
+ninja -C "$BUILD" -j"$JOBS" >"$WORK/ninja.log" 2>&1 || {
+    echo "build failed; nothing was installed. Last 20 lines:"
+    sed 's/^/    /' "$WORK/ninja.log" | tail -20
+    echo "  full log: $WORK/ninja.log"
+    exit 1
+}
+
+# Build-only: stop before touching /usr. See the note in
+# cros-fp-fingerprint/apply.sh - this exists so a restore can be trusted.
+if [ -n "${FIXER_BUILD_ONLY:-}" ]; then
+    echo "build-only: built $MODE libcamera in $BUILD; nothing installed"
+    exit 0
+fi
 
 # --- install ------------------------------------------------------------------
 LIBDIR=/usr/lib/x86_64-linux-gnu
