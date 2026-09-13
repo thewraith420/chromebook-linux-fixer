@@ -14,6 +14,7 @@ detect script says the problem is actually present on this machine.
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -229,6 +230,31 @@ def _run_one(fix, action, c, assume_yes=False):
     return code
 
 
+def cmd_selftest(args, c):
+    """
+    Can these fixes still be built from nothing, today?
+
+    Deliberately not the same question as `status`. A fix reports "applied" off
+    the installed binary and the running service, which keep saying yes long
+    after the source behind them stopped compiling - that is how issue #1 sat
+    broken for two weeks while this machine showed green. Restoring a backup is
+    a clean install, so every from-source fix has to build again exactly when
+    things are already going badly, and one of them is what pkexec
+    authenticates against.
+    """
+    script = Path(__file__).resolve().parent.parent / "lib" / "build-selftest.sh"
+    if not os.access(script, os.X_OK):
+        print(c(f"missing {script}", RED))
+        return 2
+    print(c("Building each from-source fix. Nothing is installed.", DIM))
+    print()
+    # Flush first: the child writes straight to the terminal while our own
+    # prints sit in a buffer, so without this the header lands after the
+    # results it is meant to introduce.
+    sys.stdout.flush()
+    return subprocess.call([str(script), *(args.fix or [])])
+
+
 def installed_kernels():
     try:
         return sorted(os.listdir("/lib/modules"))
@@ -312,6 +338,11 @@ def main():
 
     sub.add_parser("status", help="what this machine needs")
 
+    ps = sub.add_parser("selftest",
+                        help="do the build-from-source fixes still compile?")
+    ps.add_argument("fix", nargs="*",
+                    help="only these (default: every fix that builds something)")
+
     pl = sub.add_parser("list", help="every known fix")
     pl.add_argument("-v", "--verbose", action="store_true")
 
@@ -338,6 +369,8 @@ def main():
 
     if args.command == "status":
         return cmd_status(args, machine, fixes, c)
+    if args.command == "selftest":
+        return cmd_selftest(args, c)
     if args.command == "list":
         return cmd_list(args, machine, fixes, c)
     # --kernel list is a query, so answer it before demanding a fix id.

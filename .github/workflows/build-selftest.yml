@@ -1,0 +1,96 @@
+# Do the build-from-source fixes still compile?
+#
+# Issue #1 was a fix that had not built since 2026-08-28, found by a stranger,
+# because nothing local ever rebuilds a fix that is already installed. verify
+# kept reporting "applied" - correctly, about a binary compiled before the
+# breakage - while the source behind it had rotted. This asks the other
+# question, on every push, so the answer arrives on the day something breaks
+# rather than the day someone needs it.
+#
+# It matters for the one machine this repo exists for, not only for strangers:
+# restoring a backup is a clean install, every from-source fix has to build
+# again on the restored system, and cros-fp-fingerprint is what pkexec
+# authenticates against under the GUI. These fixes also pin upstream revisions
+# and patch them, so they can break with no local change at all - an upstream
+# repo moving, a yanked crate, a retagged release. Only a build finds that.
+#
+# No Chromebook is involved. Compiling needs none of the hardware, so a plain
+# runner answers "does this still build"; whether it then WORKS is a question
+# only the Slate can answer, and this does not pretend otherwise.
+name: build-selftest
+
+on:
+  push:
+    paths:
+      - 'fixes/**'
+      - 'lib/build-selftest.sh'
+      - '.github/workflows/build-selftest.yml'
+  pull_request:
+  # Upstream can break this without anyone touching the repo, so also run on a
+  # timer rather than only on our own changes.
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+jobs:
+  quick:
+    # cros-fp-fingerprint and nightfall build in minutes. libcamera does not,
+    # so it is a separate job below and not in the way of ordinary pushes.
+    name: ${{ matrix.fix }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fix: [cros-fp-fingerprint, nightfall]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            busybox-static cpio gzip fakeroot kexec-tools e2fsprogs \
+            build-essential pkg-config libdrm-dev git curl
+
+      - name: Rust toolchain
+        if: matrix.fix == 'cros-fp-fingerprint'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Nightfall checkout
+        if: matrix.fix == 'nightfall'
+        run: |
+          git clone --depth 1 \
+            https://github.com/thewraith420/nightfall-boot-manager \
+            "$HOME/nightfall-boot-manager"
+
+      - name: Build
+        # e2fsck and kexec live in /usr/sbin, which is not always on a
+        # non-root runner's PATH. Without this the tool precheck reports
+        # "cannot check here" and the job fails having verified nothing -
+        # which is at least honest, but is not the answer we came for.
+        run: |
+          export PATH="$PATH:/usr/sbin:/sbin"
+          ./lib/build-selftest.sh ${{ matrix.fix }}
+
+  libcamera:
+    # 10-30 minutes, and it is the fix least likely to rot: the source is a
+    # pinned, checksummed tarball rather than a moving upstream. Weekly and
+    # on demand is proportionate; blocking every push on it is not.
+    name: ipu3-camera
+    if: github.event_name != 'push' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build build-essential pkg-config git curl ca-certificates \
+            python3-yaml python3-jinja2 python3-ply \
+            libgnutls28-dev openssl libssl-dev libyaml-dev libudev-dev \
+            libevent-dev libdrm-dev
+      - name: Build
+        run: ./lib/build-selftest.sh ipu3-camera
