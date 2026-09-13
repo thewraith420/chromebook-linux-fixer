@@ -34,10 +34,29 @@ if [ -n "$MISSING" ]; then
     exit 1
 fi
 
+# Nightfall records how the last boot through it went, and a fallback is the
+# thing worth noticing: it means the display or touch did not come up and it
+# booted the first kernel blind rather than stranding the machine. That
+# succeeds, so nothing else would ever mention it - which is how a degraded
+# boot path stays invisible until the fallback also fails.
+LOG=""
+for c in /boot/nightfall-last-boot.log /boot/picker-last-boot.log; do
+    [ -r "$c" ] && { LOG="$c"; break; }
+done
+OUTCOME=""
+[ -n "$LOG" ] && OUTCOME=$(sed -n 's/^outcome:[[:space:]]*//p' "$LOG" | head -1)
+
 DEFAULT=$(grep -hE '^GRUB_DEFAULT=' /etc/default/grub 2>/dev/null | cut -d= -f2- | tr -d '"')
 echo "Nightfall installed [$NAME] ($(du -h "$PICKER_DIR/vmlinuz" | cut -f1) kernel,"\
      "$(du -h "$PICKER_DIR/initramfs.img" | cut -f1) initramfs)"
 case "$DEFAULT" in
     picker|nightfall) echo "and it is the default GRUB entry" ;;
     *)      echo "selectable from the GRUB menu; not the default" ;;
+esac
+case "$OUTCOME" in
+    "")      ;;                       # never booted through it, or no log
+    *fallback*|*failed*|*error*)
+        echo "WARNING: last boot through it ended in: $OUTCOME"
+        echo "see 'chromebook-fixer logs nightfall' for why" ;;
+    *)       echo "last boot through it: $OUTCOME" ;;
 esac

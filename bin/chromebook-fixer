@@ -230,6 +230,43 @@ def _run_one(fix, action, c, assume_yes=False):
     return code
 
 
+def cmd_logs(args, fixes, c):
+    """
+    Show a fix's own log, for the fixes that keep one.
+
+    Some of what this tool installs runs where the journal does not: Nightfall
+    is a whole boot environment with no syslog, no scrollback and no network,
+    so it writes its account of the boot to a file and that file is the only
+    record. Knowing the path was previously the entire interface.
+    """
+    have = [f for f in fixes if f.has("logs")]
+    if not args.fix:
+        if not have:
+            print("No fix here keeps a log.")
+            return 0
+        print("Fixes that keep a log of their own:")
+        for f in have:
+            print(f"  {f.id:<28} {f.name}")
+        print()
+        print(f"Show one with: {c('chromebook-fixer logs <id>', BOLD)}")
+        return 0
+
+    match = next((f for f in fixes if f.id == args.fix), None)
+    if match is None:
+        print(c(f"unknown fix: {args.fix}", RED))
+        return 2
+    if not match.has("logs"):
+        print(f"{match.id} does not keep a log of its own.")
+        if have:
+            print("These do: " + ", ".join(f.id for f in have))
+        return 1
+    # Streamed, not captured: these are long (Nightfall's runs to a thousand
+    # lines of dmesg) and belong in a pager or a pipe, not in a buffer we then
+    # print back.
+    sys.stdout.flush()
+    return match.run("logs", capture=False)[0]
+
+
 def cmd_selftest(args, c):
     """
     Can these fixes still be built from nothing, today?
@@ -338,6 +375,9 @@ def main():
 
     sub.add_parser("status", help="what this machine needs")
 
+    pg = sub.add_parser("logs", help="show a fix's own diagnostic log, if it keeps one")
+    pg.add_argument("fix", nargs="?", help="which fix (omit to list those that have logs)")
+
     ps = sub.add_parser("selftest",
                         help="do the build-from-source fixes still compile?")
     ps.add_argument("fix", nargs="*",
@@ -369,6 +409,8 @@ def main():
 
     if args.command == "status":
         return cmd_status(args, machine, fixes, c)
+    if args.command == "logs":
+        return cmd_logs(args, fixes, c)
     if args.command == "selftest":
         return cmd_selftest(args, c)
     if args.command == "list":
