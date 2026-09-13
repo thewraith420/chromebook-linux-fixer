@@ -188,6 +188,7 @@ class Window(Adw.ApplicationWindow):
             group.add(row)
             self.category_rows[key] = (row, fixes)
         page.add(group)
+        page.add(self._build_boot_timeouts())
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -221,7 +222,111 @@ class Window(Adw.ApplicationWindow):
 
     # -- summaries ----------------------------------------------------------
 
+    # -- boot menu timeouts ------------------------------------------------
+
+    NF_TIMEOUT_FILE = "/boot/nightfall-timeout"
+
+    @staticmethod
+    def _grub_timeout():
+        try:
+            for line in open("/etc/default/grub"):
+                if line.startswith("GRUB_TIMEOUT="):
+                    v = line.split("=", 1)[1].split("#")[0].strip().strip('"')
+                    return int(v)
+        except (OSError, ValueError):
+            pass
+        return None
+
+    @classmethod
+    def _nightfall_timeout(cls):
+        try:
+            return int(open(cls.NF_TIMEOUT_FILE).readline().strip())
+        except (OSError, ValueError):
+            return None
+
+    def _build_boot_timeouts(self):
+        """
+        How long each boot menu waits. Two rows, not one: the value that
+        strands you differs between them. GRUB's 0 means no menu and boots
+        immediately; Nightfall's 0 disables auto-boot and waits for a tap
+        forever, which on a tablet whose touchscreen may be the broken part is
+        the unrecoverable one.
+        """
+        group = Adw.PreferencesGroup(
+            title="Boot menus",
+            description="How long each menu waits before deciding for you. "
+                        "Takes effect on the next boot.")
+        self.timeout_rows = []
+        # (key, title, minimum, what an absent/edge value means)
+        for key, title, low, note in (
+            ("grub", "GRUB menu", -1,
+             "-1 waits forever; 0 skips the menu entirely"),
+            ("nightfall", "Nightfall menu", 0,
+             "0 never auto-boots - it waits for a tap forever"),
+        ):
+            row = Adw.ActionRow(title=title, subtitle=note)
+            spin = Gtk.SpinButton.new_with_range(low, 3600, 1)
+            spin.set_valign(Gtk.Align.CENTER)
+            btn = Gtk.Button(label="Set", valign=Gtk.Align.CENTER)
+            btn.connect("clicked",
+                        lambda _b, k=key, sp=spin: self._set_timeout(k, sp))
+            box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+            box.append(spin)
+            box.append(btn)
+            row.add_suffix(box)
+            group.add(row)
+            self.timeout_rows.append((key, row, spin, note))
+        self._refresh_timeouts()
+        return group
+
+    def _refresh_timeouts(self):
+        for key, row, spin, note in getattr(self, "timeout_rows", []):
+            value = (self._grub_timeout() if key == "grub"
+                     else self._nightfall_timeout())
+            if value is None:
+                row.set_subtitle(f"using the built-in default — {note}")
+                # Do not leave the spinner reading 0 when the real setting is
+                # "unset": 0 is a meaningful and, for Nightfall, dangerous
+                # value, and a control that displays it looks like it is set.
+                spin.set_value(30 if key == "nightfall" else 5)
+            else:
+                row.set_subtitle(f"{value}s — {note}")
+                spin.set_value(value)
+
+    def _set_timeout(self, key, spin):
+        value = int(spin.get_value())
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        cmd = [cli, "--no-colour", "boot-timeout", f"--{key}", str(value)]
+
+        if key == "nightfall" and value == 0:
+            # The CLI refuses this without -y. Ask the same question here
+            # rather than passing -y silently, and say what it actually does -
+            # "0" reads like "no wait", and it means the opposite.
+            dialog = Adw.MessageDialog(
+                transient_for=self, modal=True,
+                heading="Never auto-boot?",
+                body="0 does not boot immediately. It disables Nightfall's "
+                     "auto-boot, so the menu waits for a tap forever. "
+                     "If the touchscreen ever fails, this machine has no "
+                     "keyboard to get past it.")
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("go", "Set anyway")
+            dialog.set_response_appearance("go", Adw.ResponseAppearance.DESTRUCTIVE)
+            # Cancel on Enter and on Escape. The dangerous answer should never
+            # be the one a stray keypress or a dismissed dialog produces.
+            dialog.set_default_response("cancel")
+            dialog.set_close_response("cancel")
+            dialog.connect("response", lambda _d, r: (
+                self._run_in_window(f"boot-timeout {key}", cmd + ["--yes"],
+                                    stream=False, refresh_after=True)
+                if r == "go" else None))
+            dialog.present()
+            return
+        self._run_in_window(f"boot-timeout {key}", cmd,
+                            stream=False, refresh_after=True)
+
     def refresh_all(self):
+        self._refresh_timeouts()
         # Rows on any pushed page.
         for row in self.rows:
             row.refresh()
