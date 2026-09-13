@@ -20,7 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
-from registry import CATEGORIES, Machine, load_fixes, STATE_DIR  # noqa: E402
+from registry import (CATEGORIES, Machine, load_fixes, STATE_DIR,  # noqa: E402
+                      sudo_command)
 
 DISCLAIMER = """\
 chromebook-fixer makes LOW-LEVEL CHANGES to this system.
@@ -230,6 +231,46 @@ def _run_one(fix, action, c, assume_yes=False):
     return code
 
 
+def cmd_boot_timeout(args, c):
+    """
+    Read or set how long each boot menu waits.
+
+    Two menus with different mechanisms and different dangerous values, so
+    they stay two flags rather than one number: GRUB's 0 boots immediately
+    while Nightfall's 0 disables auto-boot and waits forever, which on a
+    machine whose touchscreen may be the broken part is the unrecoverable one.
+    """
+    script = Path(__file__).resolve().parent.parent / "lib" / "boot-timeout.sh"
+    if not os.access(script, os.X_OK):
+        print(c(f"missing {script}", RED))
+        return 2
+
+    env = dict(os.environ)
+    cmd, askpass = sudo_command()
+    env["FIXER_SUDO"] = cmd
+    if askpass:
+        env["SUDO_ASKPASS"] = askpass
+    if args.yes:
+        env["FIXER_YES"] = "1"
+
+    worst = 0
+    for which in ("grub", "nightfall"):
+        value = getattr(args, which)
+        if value is None:
+            continue
+        sys.stdout.flush()
+        worst = max(worst, subprocess.call([str(script), which, value], env=env))
+
+    if args.grub is None and args.nightfall is None:
+        sys.stdout.flush()
+        return subprocess.call([str(script), "show"], env=env)
+    if worst == 0:
+        print()
+        sys.stdout.flush()
+        subprocess.call([str(script), "show"], env=env)
+    return worst
+
+
 def cmd_logs(args, fixes, c):
     """
     Show a fix's own log, for the fixes that keep one.
@@ -375,6 +416,15 @@ def main():
 
     sub.add_parser("status", help="what this machine needs")
 
+    pt = sub.add_parser("boot-timeout",
+                        help="how long each boot menu waits before deciding")
+    pt.add_argument("--grub", metavar="SECS",
+                    help="GRUB's menu timeout (0 = no menu, -1 = wait forever)")
+    pt.add_argument("--nightfall", metavar="SECS",
+                    help="Nightfall's menu timeout (0 = never auto-boot)")
+    pt.add_argument("-y", "--yes", action="store_true",
+                    help="accept a timeout that can strand a keyboardless machine")
+
     pg = sub.add_parser("logs", help="show a fix's own diagnostic log, if it keeps one")
     pg.add_argument("fix", nargs="?", help="which fix (omit to list those that have logs)")
 
@@ -409,6 +459,8 @@ def main():
 
     if args.command == "status":
         return cmd_status(args, machine, fixes, c)
+    if args.command == "boot-timeout":
+        return cmd_boot_timeout(args, c)
     if args.command == "logs":
         return cmd_logs(args, fixes, c)
     if args.command == "selftest":
