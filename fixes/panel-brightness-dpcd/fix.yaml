@@ -17,3 +17,14 @@ danger: |
   are backed up first and revert removes the parameter. If the panel does not
   support DPCD backlight this can leave brightness stuck rather than fixed -
   revert and reboot if that happens.
+
+  To recover without a keyboard, boot through Nightfall, tap the kernel, choose
+  Edit, remove the parameter, and save it for this kernel on every boot - a
+  whole-line override kept in /boot/nightfall-cmdline that survives
+  update-grub. One caveat specific to this parameter: i915 options are copied
+  into Nightfall's own boot entry when they are added, so a needed panel fix is
+  never missing from it. On a panel where this parameter makes the display
+  WORSE, Nightfall's screen would be affected as well, and recovery then needs
+  a keyboard at GRUB. Reverting removes it from the OS entries but
+  deliberately leaves it in Nightfall's, so a revert can never darken the
+  escape hatch.

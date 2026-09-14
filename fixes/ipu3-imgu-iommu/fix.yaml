@@ -27,6 +27,15 @@ danger: |
   ImgU without a passthrough domain locked the machine solid three times - no
   panic, no oops, nothing in the journal or pstore, a forced power-off each
   time, and one of those left the boot filesystem dirty.
+
+  If the machine will not come up afterwards, no keyboard is needed. Boot
+  through Nightfall, tap the kernel, choose Edit, delete iommu=pt, and save it
+  for this kernel on every boot. That is a whole-line override kept in
+  /boot/nightfall-cmdline: it survives update-grub, never touches grub.cfg and
+  leaves recovery entries alone, so the machine boots without the parameter
+  until this fix is reverted from the running system. Nightfall's own entry
+  does not carry iommu=pt - only i915 options are copied there - so this
+  change cannot affect Nightfall itself.
 notes: |
   If the kernel already carries the per-device quirk, this fix reports itself
   as not needed and does nothing.

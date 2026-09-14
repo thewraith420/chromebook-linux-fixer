@@ -27,6 +27,11 @@
 # root and has no use for iommu=, root= or crashkernel=, matching what
 # install-picker.sh chooses to carry.
 #
+# Additions are copied into that entry; removals are not. i915 options are
+# added here to make the panel work, so a missing one is what darkens
+# Nightfall, and a revert must never be the thing that does it. See
+# edit_picker, and picker-drift, which flags only the dangerous direction.
+#
 # So: write to every config that exists, verify the result, and restore the
 # backup if the bootloader refuses to regenerate.
 #
@@ -172,7 +177,7 @@ cmd_status() {
         echo "picker ($PICKER_CFG):"
         echo "         $(picker_cmdline)"
         if cmd_picker_drift >/dev/null 2>&1; then
-            echo "         WARNING: its i915.* options differ from the running kernel"
+            echo "         WARNING: it lacks i915.* options the running kernel boots with"
         fi
     fi
 }
@@ -187,11 +192,17 @@ cmd_picker_drift() {
     # string would report drift on every machine where /proc/cmdline is
     # restricted, and the "repair" for that is rewriting a boot entry that
     # was correct.
-    [ -r /proc/cmdline ] || return 2
-    local running picker
-    running=$(i915_options < /proc/cmdline)
-    picker=$(picker_cmdline | i915_options)
-    [ "$running" = "$picker" ] && return 1
+    local proc="${PROC_CMDLINE:-/proc/cmdline}"
+    [ -r "$proc" ] || return 2
+    local missing
+    # Drift is Nightfall's entry LACKING an i915 option the running kernel
+    # boots with - the direction that can leave its screen dark. Nightfall
+    # carrying EXTRA options is now the intended state after a revert, since
+    # removals are deliberately not copied into its entry; flagging that
+    # would warn about the safeguard. comm -23: lines only in the running set
+    # (a different value for the same key counts, since the line differs).
+    missing=$(comm -23 <(i915_options < "$proc") <(picker_cmdline | i915_options))
+    [ -z "$missing" ] && return 1
     return 0
 }
 
@@ -285,6 +296,18 @@ edit_picker() {
         i915.*) : ;;
         *) return 0 ;;
     esac
+
+    # Additions only. On this hardware an i915 option is added to make the
+    # panel WORK - enable_dpcd_backlight=2, enable_psr=0 - so copying additions
+    # keeps a needed panel fix from ever being missing from Nightfall's entry,
+    # which was the original drift bug. Removals are the other direction: a
+    # revert strips a parameter someone believed was wrong, and if it was in
+    # fact the one keeping the panel lit, propagating that would darken the
+    # OS and the escape hatch in the same step. Nightfall keeps what it had.
+    if [ "$action" != add ]; then
+        echo "  picker: kept $param in Nightfall's entry (removals are not copied there)"
+        return 0
+    fi
 
     $SUDO cp -a "$PICKER_CFG" "$PICKER_CFG.chromebook-fixer.$STAMP" \
         || die "could not back up $PICKER_CFG"
