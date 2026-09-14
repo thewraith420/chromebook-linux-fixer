@@ -160,34 +160,42 @@ class Window(Adw.ApplicationWindow):
 
     def _fit_to_content(self):
         """
-        Open exactly as tall as the root page needs, up to the screen's cap.
+        Open as tall as the tallest page needs, up to the screen's cap.
 
-        Third attempt, and the first that measures the right thing. A constant
-        went stale twice as rows were added - 720, then 900, each cutting off
-        the last category. Replacing it with 92% of the screen fixed "too
-        small" and produced "too big": this tablet held in portrait gets 1300px
-        for about 1000px of content. Both sized the window from something other
-        than what is in it.
+        A constant went stale twice as rows were added (720, then 900 - each
+        cut off the last category), and 92% of the screen opened 1300px tall in
+        portrait for about 1000px of content. Both sized the window from
+        something other than what is in it, so this measures instead.
 
-        So measure the groups actually on the page, and take the larger of
-        their sum and the page's own report. Adwaita's preferences page scrolls
-        internally, so its natural height can come back as the scroller's
-        rather than the content's; the groups themselves do not scroll, so
-        their sum is the reliable half. Groups are measured narrower than the
-        window because the page clamps them - measuring wide would under-count
-        the lines their descriptions wrap onto. Adding a row changes the answer
-        on its own; turning the screen changes the cap.
+        Every page, not only the root: the window's height is fixed once it
+        opens, and category pages are drawn in it. With the boot settings moved
+        off the root, the root became the short page - sizing to it alone would
+        make Booting and recovery scroll. Category pages are built here but
+        never shown; FixRows run no detection until refreshed, so this costs
+        widgets, not checks.
+
+        A page's height is the larger of its own natural height and the sum of
+        its groups plus Adwaita's spacing. The page scrolls internally, so it
+        can report the scroller's height rather than its content's; groups do
+        not scroll, so their sum is the reliable half. Groups are measured
+        narrower than the window because the page clamps them, and measuring
+        wide would under-count the lines their descriptions wrap onto.
         """
         cap = self._screen_cap_height()
         try:
             def natural(widget, width):
                 return widget.measure(Gtk.Orientation.VERTICAL, width)[1]
-            groups = sum(natural(g, 560) for g in self._root_groups)
-            # Adwaita spaces groups apart and pads the page; allow for that
-            # rather than reaching into the private box that holds them.
-            body = max(natural(self._root_page, 760),
-                       groups + 24 * len(self._root_groups) + 48)
-            want = natural(self._root_header, 760) + body
+
+            def page_height(page, groups):
+                return max(natural(page, 760),
+                           sum(natural(g, 560) for g in groups)
+                           + 24 * len(groups) + 48)
+
+            tallest = page_height(self._root_page, self._root_groups)
+            for key in self.category_rows:
+                page, groups, _rows, _handles = self._build_category_page(key, "")
+                tallest = max(tallest, page_height(page, groups))
+            want = natural(self._root_header, 760) + tallest
             if want > 200:                     # a failed measure reads as ~0
                 return max(600, min(cap, want))
         except Exception:                                  # noqa: BLE001
@@ -232,11 +240,9 @@ class Window(Adw.ApplicationWindow):
             group.add(row)
             self.category_rows[key] = (row, fixes)
         page.add(group)
-        boot = self._build_boot_menu()
-        page.add(boot)
         # Kept so the window can be sized from what is actually on the page.
         self._root_page = page
-        self._root_groups = [info, group, boot]
+        self._root_groups = [info, group]
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -252,17 +258,47 @@ class Window(Adw.ApplicationWindow):
 
     # -- level 2: one category ---------------------------------------------
 
-    def _open_category(self, key, label):
-        _row, fixes = self.category_rows[key]
+    def _build_category_page(self, key, label):
+        """
+        One category's page, built but not shown and not checked.
 
+        Separate from _open_category so the window can measure a page before
+        it is ever opened. FixRows come up with their id as the subtitle and
+        run no detection until refreshed, so building one is cheap and it is
+        already the height it will be on screen.
+        """
+        _row, fixes = self.category_rows[key]
         page = Adw.PreferencesPage()
-        group = Adw.PreferencesGroup()
+        extras, handles = self._category_extras(key)
+        # Titled only when settings follow, so a page that is only fixes looks
+        # exactly as it always has.
+        group = Adw.PreferencesGroup(title="Fixes" if extras else "")
+        rows = []
         for fix in fixes:
             row = FixRow(fix, self)
-            self.rows.append(row)
+            rows.append(row)
             group.add(row)
-            row.refresh()
         page.add(group)
+        for extra in extras:
+            page.add(extra)
+        return page, [group, *extras], rows, handles
+
+    def _category_extras(self, key):
+        """Settings that belong on a category's page, after its fixes."""
+        if key == "boot":
+            return self._build_boot_settings()
+        return [], None
+
+    def _open_category(self, key, label):
+        page, _groups, rows, handles = self._build_category_page(key, label)
+        for row in rows:
+            self.rows.append(row)
+            row.refresh()
+        if handles is not None:
+            # Assigned only for the page actually opened - measuring builds
+            # pages too, and those must not become what refresh updates.
+            self.boot = handles
+            self._refresh_boot_menu()
 
         toolbar = Adw.ToolbarView()
         toolbar.add_top_bar(Adw.HeaderBar())     # back button is automatic
@@ -343,31 +379,50 @@ class Window(Adw.ApplicationWindow):
             return False, "file"
         return True, "ignored"          # garbage keeps auto-rotate on
 
-    def _build_boot_menu(self):
+    @staticmethod
+    def _nightfall_installed():
         """
-        What each boot menu does on its own.
-
-        Timeouts are two rows, not one: the value that strands you differs.
-        GRUB's 0 means no menu and boots immediately; Nightfall's 0 disables
-        auto-boot and waits for a tap forever, which on a tablet whose
-        touchscreen may be the broken part is the unrecoverable one.
-
-        Rotation and auto-rotate are separate rows because they interact. With
-        auto-rotate on, the starting rotation only lasts until the first
-        accelerometer reading; with it off, it is where Nightfall stays. The
-        rotation row's subtitle says which of those is in effect.
+        Is Nightfall on this machine at all - by the same test its fix's verify
+        uses: the marked entry in custom.cfg, and its files on /boot. Installed
+        by hand counts too; these are Nightfall's settings, not the fix's.
         """
-        group = Adw.PreferencesGroup(
-            title="Boot menus",
-            description="What each boot menu does on its own. "
-                        "Takes effect on the next boot.")
-        self.timeout_rows = []
-        for key, title, low, note in (
-            ("grub", "GRUB menu timeout", -1,
-             "-1 waits forever; 0 skips the menu entirely"),
-            ("nightfall", "Nightfall menu timeout", 0,
-             "0 never auto-boots - it waits for a tap forever"),
-        ):
+        import os
+        try:
+            with open("/boot/grub/custom.cfg") as f:
+                cfg = f.read()
+        except OSError:
+            return False
+        marked = any(f"### BEGIN {n} ###" in cfg
+                     for n in ("nightfall-boot-manager", "nocturne-boot-picker"))
+        return marked and any(os.path.isdir(d) for d in ("/boot/nightfall", "/boot/picker"))
+
+    def _build_boot_settings(self):
+        """
+        Booting and recovery's settings: Nightfall's, then GRUB's.
+
+        They live on this page rather than the root one because everything
+        about booting belongs in one place, in the order it is used: install
+        Nightfall, make it the default, tune it, and GRUB beneath as the
+        fallback. The root page is a list of places to go, not a panel.
+
+        Nightfall's group shows one line instead of its rows until Nightfall is
+        installed - on a machine without it they configure nothing. GRUB's
+        stands on its own: its menu wait applies either way, and it is still
+        how a keyboard reaches GRUB's own recovery entries.
+
+        The timeouts stay separate rows in separate groups rather than one
+        number, because the value that strands you differs. GRUB's 0 means no
+        menu and boots immediately; Nightfall's 0 disables auto-boot and waits
+        for a tap forever, which on a tablet whose touchscreen may be the
+        broken part is the unrecoverable one.
+
+        Returns (groups, handles). Handles are only kept for a page that is
+        actually opened; see _open_category.
+        """
+        installed = self._nightfall_installed()
+        h = {"timeout_rows": []}
+
+        def timeout_row(key, title, low, note):
             row = Adw.ActionRow(title=title, subtitle=note)
             spin = Gtk.SpinButton.new_with_range(low, 3600, 1)
             spin.set_valign(Gtk.Align.CENTER)
@@ -378,36 +433,69 @@ class Window(Adw.ApplicationWindow):
             box.append(spin)
             box.append(btn)
             row.add_suffix(box)
-            group.add(row)
-            self.timeout_rows.append((key, row, spin, note))
+            h["timeout_rows"].append((key, row, spin, note))
+            return row
 
-        # Chosen and then Set, like the timeouts, rather than applied on
-        # change: every change is an authentication prompt, and refreshing
-        # the rows moves these controls programmatically - applying on change
-        # would turn every refresh into a write.
-        self.rotate_row = Adw.ComboRow(
-            title="Nightfall starting rotation",
+        nf = Adw.PreferencesGroup(
+            title="Nightfall settings",
+            description="What Nightfall does on its own. "
+                        "Takes effect on the next boot through it.")
+        h["hint"] = Adw.ActionRow(
+            title="Nightfall is not installed",
+            subtitle="Install it above - its settings appear here once it is.")
+        nf.add(h["hint"])
+
+        # Chosen and then Set rather than applied on change: every change is an
+        # authentication prompt, and refreshing moves these controls
+        # programmatically - applying on change would turn a refresh into a write.
+        h["rotate_row"] = Adw.ComboRow(
+            title="Starting rotation", subtitle="checking…",
             model=Gtk.StringList.new([f"{r}°" for r in self.ROTATIONS]))
         rot_set = Gtk.Button(label="Set", valign=Gtk.Align.CENTER)
         rot_set.connect("clicked", lambda _b: self._run_boot_menu(
-            "rotate", self.ROTATIONS[self.rotate_row.get_selected()]))
-        self.rotate_row.add_suffix(rot_set)
-        group.add(self.rotate_row)
+            "rotate", self.ROTATIONS[h["rotate_row"].get_selected()]))
+        h["rotate_row"].add_suffix(rot_set)
 
-        self.autorotate_row = Adw.ComboRow(
-            title="Nightfall auto-rotate",
+        h["autorotate_row"] = Adw.ComboRow(
+            title="Auto-rotate", subtitle="checking…",
             model=Gtk.StringList.new(["On", "Off"]))
         auto_set = Gtk.Button(label="Set", valign=Gtk.Align.CENTER)
         auto_set.connect("clicked", lambda _b: self._run_boot_menu(
-            "autorotate", ("on", "off")[self.autorotate_row.get_selected()]))
-        self.autorotate_row.add_suffix(auto_set)
-        group.add(self.autorotate_row)
+            "autorotate", ("on", "off")[h["autorotate_row"].get_selected()]))
+        h["autorotate_row"].add_suffix(auto_set)
 
-        self._refresh_boot_menu()
-        return group
+        h["nightfall_rows"] = [
+            timeout_row("nightfall", "Menu timeout", 0,
+                        "0 never auto-boots - it waits for a tap forever"),
+            h["rotate_row"],
+            h["autorotate_row"],
+        ]
+        for row in h["nightfall_rows"]:
+            nf.add(row)
+
+        grub = Adw.PreferencesGroup(
+            title="GRUB",
+            description="How long GRUB's own menu waits before booting its default.")
+        grub.add(timeout_row("grub", "Menu timeout", -1,
+                             "-1 waits forever; 0 skips the menu entirely"))
+
+        # Applied here as well as on refresh, so a page measured before it is
+        # opened is measured with the rows that will actually show.
+        h["hint"].set_visible(not installed)
+        for row in h["nightfall_rows"]:
+            row.set_visible(installed)
+        return [nf, grub], h
 
     def _refresh_boot_menu(self):
-        for key, row, spin, note in getattr(self, "timeout_rows", []):
+        h = getattr(self, "boot", None)
+        if h is None:                  # Booting and recovery not opened yet
+            return
+        installed = self._nightfall_installed()
+        h["hint"].set_visible(not installed)
+        for row in h["nightfall_rows"]:
+            row.set_visible(installed)
+
+        for key, row, spin, note in h["timeout_rows"]:
             if key == "grub":
                 value = self._grub_timeout()
                 row.set_subtitle(f"{value}s — {note}" if value is not None
@@ -420,23 +508,21 @@ class Window(Adw.ApplicationWindow):
                 # real and, for Nightfall, dangerous setting.
                 spin.set_value(value)
 
-        if not hasattr(self, "rotate_row"):
-            return
         rot, rsource = self._nightfall_rotation()
         auto, asource = self._nightfall_autorotate()
-        self.rotate_row.set_selected(self.ROTATIONS.index(rot))
-        self.autorotate_row.set_selected(0 if auto else 1)
+        h["rotate_row"].set_selected(self.ROTATIONS.index(rot))
+        h["autorotate_row"].set_selected(0 if auto else 1)
         if auto:
-            self.rotate_row.set_subtitle(
+            h["rotate_row"].set_subtitle(
                 f"starts at {rot}°{self._source_note(rsource)} — auto-rotate "
                 f"takes over within about 750ms")
-            self.autorotate_row.set_subtitle(
+            h["autorotate_row"].set_subtitle(
                 f"on{self._source_note(asource)} — follows the accelerometer")
         else:
-            self.rotate_row.set_subtitle(
+            h["rotate_row"].set_subtitle(
                 f"stays at {rot}°{self._source_note(rsource)} — auto-rotate "
                 f"is off, so this pins it")
-            self.autorotate_row.set_subtitle(
+            h["autorotate_row"].set_subtitle(
                 f"off{self._source_note(asource)} — Nightfall keeps its "
                 f"starting rotation")
 
