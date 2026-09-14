@@ -12,12 +12,24 @@ description: |
   runs. The control is left permanently grabbed and every later attempt to
   configure the device fails with EBUSY until reboot.
 
+  EBUSY is not the worst of it. Forcing a stream onto the wedged device
+  HARD-LOCKS the machine - no panic, nothing logged, physical reset required.
+  A clean ImgU that merely fails to start CSS only stalls; a re-wedged one is
+  what locks up. This is one of the two independent hard-lock paths found in
+  the IPU3 work, separate from the IOMMU one (ipu3-imgu-iommu), and kernel
+  patch 9202 was the finding that turned it into a recoverable error.
+
   Because ipu3-imgu is a module rather than built-in, this can be fixed by
   building a patched copy of just that driver against the running kernel's
   headers and registering it with DKMS - no full kernel rebuild, and DKMS
   redoes it automatically when the kernel changes.
 danger: |
-  Replaces a kernel driver with a locally built one. The original module is
+  The condition this fix detects is itself dangerous. While the ImgU is
+  wedged, opening the camera again hard-locks the machine. If status reports
+  this fix as NEEDED, clear the wedge - unbind and rebind the ImgU, or reboot -
+  BEFORE using the camera, whether or not you apply anything.
+
+  Applying it replaces a kernel driver with a locally built one. The original module is
   left in place and DKMS can be removed to restore it, but a module that fails
   to load will leave the camera unavailable until reverted.
 
@@ -25,3 +37,8 @@ danger: |
 notes: |
   Recovering a wedged device without this fix: unbind and rebind the ImgU, or
   reboot. The leak is cleared either way; this stops it recurring.
+
+  BobZKernel carries the real fix in-tree as patch 9202, hardware-confirmed and
+  present in the commit the 7.2.3 kernel was built from (724796d). On that
+  kernel the wedge cannot occur and this reports "cannot tell". This fix is for
+  stock kernels without 9202. Its DKMS build is not implemented yet.

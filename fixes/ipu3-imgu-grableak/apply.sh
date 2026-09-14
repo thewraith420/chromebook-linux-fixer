@@ -43,7 +43,10 @@ Fetch it for the target kernel, e.g. on Debian/Ubuntu:
     apt-get source linux-image-unsigned-$TARGET
     cp -r <srcdir>/drivers/staging/media/ipu3/* "$SRC/"
 
-then re-run this fix. The patch in patches/ applies against that source.
+The patch itself is kernel patch 9202, published in the nocturne-ipu3-camera
+repository as kernel/9202-ipu3-imgu-fix-pipe_mode-grab-leak.patch. It is not
+vendored into this fix yet - there is no patches/ directory here - which is one
+of the two things standing between this fix and a working DKMS build.
 MSG
     exit 1
 fi

@@ -13,7 +13,22 @@ fi
 # streaming means the device is wedged right now.
 for sd in $("$FIXER_REPO/lib/find-subdev.sh" "ipu3-imgu" 2>/dev/null); do
     if v4l2-ctl -d "$sd" -L 2>/dev/null | grep -q "pipe_mode.*grabbed"; then
-        echo "$sd has pipe_mode grabbed with nothing streaming (leaked)"
+        # The first two lines are what `status` shows and the first is the
+        # GUI's subtitle, so they carry the danger rather than the diagnosis.
+        # This used to report only the leak, which reads like an EBUSY to wait
+        # out - and the person reading it is exactly the person about to try
+        # the camera again. Kernel patch 9202's header is the source: "forcing
+        # a stream onto the already-wedged device hard-locks the machine (no
+        # panic, physical reset required). A clean ImgU that merely fails to
+        # start CSS only stalls; a re-wedged one is what locks up."
+        echo "WEDGED ImgU - do NOT use the camera: streaming now hard-locks the machine"
+        echo "Clear it first: unbind and rebind the ImgU (below), or reboot."
+        echo
+        echo "  $sd has pipe_mode grabbed with nothing streaming (leaked)."
+        echo "  To clear it without rebooting:"
+        echo "    sudo sh -c 'echo 0000:00:05.0 > /sys/bus/pci/drivers/ipu3-imgu/unbind'"
+        echo "    sudo sh -c 'echo 0000:00:05.0 > /sys/bus/pci/drivers/ipu3-imgu/bind'"
+        echo "  That clears this wedge; it does not stop the leak recurring."
         exit 0
     fi
 done
