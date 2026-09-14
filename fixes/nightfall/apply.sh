@@ -78,6 +78,14 @@ if [ "$KREAL" = /boot/nightfall/vmlinuz ] || [ "$KREAL" = /boot/picker/vmlinuz ]
     echo "  (already installed; reusing it via $KERNEL)"
 fi
 
+# Refuse, before minutes of building, to reinstall from a boot whose command
+# line would give Nightfall's entry the wrong panel settings - see
+# lib/nightfall-cmdline-check.sh. Skipped for a build check, which installs
+# nothing and so cannot write a bad entry.
+if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+    "$FIXER_REPO/lib/nightfall-cmdline-check.sh" || { echo "Nothing was changed."; exit 1; }
+fi
+
 # The UI binary and the initramfs are built HERE on purpose. The initramfs
 # bundles this machine's busybox, kexec and the shared libraries the picker
 # binary is linked against - one built elsewhere yields a picker that does not
@@ -143,7 +151,15 @@ fi
 echo
 echo "installing (writes /boot/<picker dir> and one entry in /boot/grub/custom.cfg;"
 echo "grub.cfg is NOT regenerated and no existing entry moves)"
-$SUDO "$INSTALLER" "$KERNEL" "$IMG"
+if [ -n "${NIGHTFALL_CMDLINE+x}" ]; then
+    # sudo resets the environment and pkexec starts from an empty one, so the
+    # installer's own NIGHTFALL_CMDLINE lever would silently not arrive and it
+    # would fall back to /proc/cmdline - the very thing the variable was set to
+    # override. Hand it across explicitly.
+    $SUDO env NIGHTFALL_CMDLINE="$NIGHTFALL_CMDLINE" "$INSTALLER" "$KERNEL" "$IMG"
+else
+    $SUDO "$INSTALLER" "$KERNEL" "$IMG"
+fi
 
 echo
 # Read the title back out rather than hardcoding it: the installer chooses it,
