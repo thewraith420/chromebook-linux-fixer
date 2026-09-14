@@ -304,6 +304,14 @@ edit_picker() {
     # revert strips a parameter someone believed was wrong, and if it was in
     # fact the one keeping the panel lit, propagating that would darken the
     # OS and the escape hatch in the same step. Nightfall keeps what it had.
+    #
+    # Keeping it is temporary, on purpose. install-nightfall.sh rebuilds the
+    # whole entry from the running kernel's i915 options every time Nightfall
+    # is (re)installed, and a normal boot that is showing its desktop has just
+    # proved that set lights the panel - so a reinstall is exactly the right
+    # moment for a kept option to be dropped, and nothing here tries to carry
+    # it across. The one boot where that proof fails is a recovery/nomodeset
+    # boot; fixes/nightfall/apply.sh refuses to reinstall from one.
     if [ "$action" != add ]; then
         echo "  picker: kept $param in Nightfall's entry (removals are not copied there)"
         return 0
