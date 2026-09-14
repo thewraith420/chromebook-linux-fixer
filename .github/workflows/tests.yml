@@ -1,0 +1,26 @@
+# Fast checks that need nothing but bash - kept out of build-selftest.yml so a
+# change to lib/ does not also queue the multi-minute source builds.
+#
+# What they guard is small and consequential: the rules that decide whether a
+# fixer action can leave Nightfall's boot entry with the wrong panel settings,
+# on a tablet where a dark Nightfall needs a keyboard to escape. Each refusal
+# rule has a case where it alone refuses, so deleting one fails the suite.
+name: tests
+
+on:
+  push:
+    paths:
+      - 'lib/**'
+      - 'tests/**'
+      - 'fixes/nightfall/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  boot-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Nightfall boot-entry safety checks
+        run: ./tests/test-nightfall-boot-safety.sh

@@ -36,6 +36,18 @@ if [ -z "$INSTALLER" ]; then
 fi
 echo "picker source: $REPO"
 
+# Refuse before touching anything - before the kernel is located or copied,
+# before minutes of building - to reinstall from a boot whose command line
+# would give Nightfall's entry the wrong panel settings. See
+# lib/nightfall-cmdline-check.sh. It used to run after the kernel had already
+# been copied out to a temp directory; harmless, but a refusal should mean
+# nothing happened, and the Nightfall installer's first version of this same
+# guard ran after copying images into /boot. Skipped for a build check, which
+# installs nothing and so cannot write a bad entry.
+if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+    "$FIXER_REPO/lib/nightfall-cmdline-check.sh" || { echo "Nothing was changed."; exit 1; }
+fi
+
 # The picker kernel is the one thing this cannot produce. Building a kernel is
 # not something this tool does, and a 1.3GHz tablet is not where you would do
 # it - so it must already exist somewhere.
@@ -76,14 +88,6 @@ if [ "$KREAL" = /boot/nightfall/vmlinuz ] || [ "$KREAL" = /boot/picker/vmlinuz ]
     cp "$KERNEL" "$TMPDIR_PICKER/vmlinuz"
     KERNEL="$TMPDIR_PICKER/vmlinuz"
     echo "  (already installed; reusing it via $KERNEL)"
-fi
-
-# Refuse, before minutes of building, to reinstall from a boot whose command
-# line would give Nightfall's entry the wrong panel settings - see
-# lib/nightfall-cmdline-check.sh. Skipped for a build check, which installs
-# nothing and so cannot write a bad entry.
-if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
-    "$FIXER_REPO/lib/nightfall-cmdline-check.sh" || { echo "Nothing was changed."; exit 1; }
 fi
 
 # The UI binary and the initramfs are built HERE on purpose. The initramfs
