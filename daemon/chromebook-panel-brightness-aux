@@ -163,43 +163,103 @@ def backlight_interface_hint(max_raw):
                   f"({BL_NATIVE_PWM_MAX})")
 
 
+def scale_to_dpcd(raw, max_raw):
+    return round(raw * DPCD_MAX / max_raw)
+
+
+def dpcd_tracks_sysfs(samples, s0, d0, max_raw):
+    """Decide from (sysfs, dpcd) pairs sampled after nudging sysfs.
+
+    True  - at some sample sysfs was away from where we started and DPCD held
+            that value's scaled equivalent: something mirrored the change.
+    False - sysfs was seen away from s0, and DPCD never followed.
+    None  - sysfs was never seen away from s0, so nothing was tested.
+
+    Tracking, not "did DPCD change": a brightness manager can move sysfs
+    during the probe (GNOME's ambient-light brightness pulls it back within a
+    few hundred ms), and the kernel faithfully mirrors that too, so a
+    before/after comparison can land exactly where it began.
+    """
+    tol = max(1, DPCD_MAX // max_raw)
+    moved = False
+    for s, d in samples:
+        if s is None or d is None or s == s0:
+            continue
+        moved = True
+        if d != d0 and abs(d - scale_to_dpcd(s, max_raw)) <= tol:
+            return True
+    return False if moved else None
+
+
 def kernel_drives_backlight(panel, bright_path, max_raw):
     """Does the running kernel already drive this panel's DPCD backlight?
 
     Same question apply.sh asks before installing - but asked again here, at
     every startup, because the answer belongs to the kernel that booted and
-    this service is not reinstalled when you reboot into a different one. A
-    machine that dual-boots a patched kernel (9200) and a stock one crosses
-    that line constantly; leaving this running on the patched side puts two
-    writers on register 0x722, one of them re-asserting every two seconds.
+    this service is not reinstalled when you reboot into a different one.
 
-    The probe nudges sysfs by ~3% and watches whether DPCD follows. That is
-    far too small to see, and it is put back immediately - unlike apply.sh's
-    40%/90% swing, which is fine once during an install but would be a visible
-    flash at every boot.
+    The probe nudges sysfs by ~3% - too little to see, and put back at once -
+    then samples sysfs and DPCD together every 25 ms for 0.6 s. On a kernel
+    carrying patch 9200 the register mirrors sysfs in well under 0.2 s,
+    measured; GNOME's automatic brightness reacts in roughly 0.3-0.5 s. An
+    earlier version slept 0.4 s and compared one reading before and after,
+    and on a desktop with automatic brightness it concluded "kernel leaves
+    DPCD alone" on a kernel that was driving it perfectly.
+
+    If the probe never sees sysfs move at all, it falls back to the backlight
+    range, which says which interface i915 chose; only if that is also
+    unrecognised does it assume the kernel does not drive the panel.
     """
+    s0 = read_int(bright_path)
+    if s0 is None:
+        return False, "cannot read sysfs brightness; assuming the kernel does not"
     try:
-        before = panel.get_brightness()
-        orig = read_int(bright_path)
-        if orig is None:
-            return False, "cannot read sysfs brightness"
-        delta = max(1, round(max_raw * 0.03))
-        probe = orig - delta if orig > delta else orig + delta
-        with open(bright_path, "w") as fh:
-            fh.write(str(probe))
-        time.sleep(0.4)
-        after = panel.get_brightness()
-        with open(bright_path, "w") as fh:
-            fh.write(str(orig))
-        time.sleep(0.1)
+        d0 = panel.get_brightness()
     except OSError as exc:
-        # Can't tell - and guessing "kernel handles it" would silently leave
-        # the panel with no brightness control at all. Assume it does not.
-        return False, f"probe failed ({exc}); assuming the kernel does not"
-    if after != before:
-        return True, (f"kernel drives DPCD itself (0x{before:04x} -> 0x{after:04x} "
-                      "when sysfs moved)")
-    return False, "kernel leaves DPCD alone (register did not follow sysfs)"
+        return False, f"cannot read DPCD ({exc}); assuming the kernel does not"
+
+    verdict = None
+    try:
+        for attempt, sign in enumerate((-1, +1)):
+            delta = max(1, round(max_raw * 0.03))
+            probe = s0 + sign * delta
+            if not 0 <= probe <= max_raw:
+                probe = s0 - sign * delta
+            with open(bright_path, "w") as fh:
+                fh.write(str(probe))
+            samples = []
+            deadline = time.monotonic() + 0.6
+            while time.monotonic() < deadline:
+                try:
+                    samples.append((read_int(bright_path), panel.get_brightness()))
+                except OSError:
+                    pass
+                time.sleep(0.025)
+            verdict = dpcd_tracks_sysfs(samples, s0, d0, max_raw)
+            if verdict is not None:
+                break
+    except OSError as exc:
+        verdict = None
+        probe_error = exc
+    else:
+        probe_error = None
+    finally:
+        try:
+            with open(bright_path, "w") as fh:
+                fh.write(str(s0))
+        except OSError:
+            pass
+
+    if verdict is True:
+        return True, "kernel drives DPCD itself (register tracked sysfs during the probe)"
+    if verdict is False:
+        return False, "kernel leaves DPCD alone (sysfs moved, register did not follow)"
+
+    hint, why = backlight_interface_hint(max_raw)
+    reason = f"probe error: {probe_error}" if probe_error else "sysfs never moved during the probe"
+    if hint is not None:
+        return hint, f"{reason}; falling back to the range - {why}"
+    return False, f"{reason}, and {why}; assuming the kernel does not"
 
 
 def main():
@@ -253,6 +313,9 @@ def main():
         # until the next boot, which is exactly what we want.
         print(f"standing down - {why}", flush=True)
         return 0
+    # Say why, every time. The first version stayed silent on this path, and a
+    # false "run" looked identical to a correct one in the journal.
+    print(f"running - {why}", flush=True)
 
     print(f"following {bright_path} (0..{max_raw}) -> {aux} DPCD "
           f"0x{EDP_BACKLIGHT_BRIGHTNESS:03x} (0..0x{DPCD_MAX:04x})", flush=True)
