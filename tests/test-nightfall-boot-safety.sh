@@ -77,5 +77,30 @@ entry "i915.enable_psr=1"
 expect "drift: same key, different value"               0 drift "ro i915.enable_psr=0"
 expect "drift: unreadable cmdline cannot tell"          2 env PICKER_CFG="$T/c.cfg" PROC_CMDLINE="$T/missing" "$KCL" picker-drift
 
+# ---- boot-menu: what `show` says Nightfall will use -------------------------
+# By value, as Nightfall's init reads it: padded digits of any length are the
+# number they spell (confirmed by the Nightfall session under dash and busybox
+# sh), and a padded non-default value showing as the default is a lie about
+# what boots - worst for the timeout, where 0 means never auto-boot.
+BM="$REPO/lib/boot-menu.sh"
+bm_show() { NF_TIMEOUT_FILE="$T/nt" NF_SPLASH_MS_FILE="$T/nms" NF_ROTATE_FILE="$T/x" \
+            NF_AUTOROTATE_FILE="$T/x" NF_SPLASH_FILE="$T/x" GRUB_FILE="$T/x" "$BM" show; }
+shows() {   # shows <file> <written value> <pattern show must contain>
+    # Captured first: `show | grep -q` under pipefail dies of SIGPIPE (141)
+    # when grep matches early, and would also hide show's own exit status.
+    printf '%s\n' "$2" > "$T/$1"
+    local out; out=$(bm_show) || return 9
+    grep -q -- "$3" <<< "$out"
+}
+expect "show exits 0 with ordinary settings"            0 bm_show
+expect "timeout: padded value is its number"            0 shows nt 000000120 "Nightfall menu         120s"
+expect "timeout: padded 0 still disables auto-boot"     0 shows nt 0000 "auto-boot DISABLED"
+expect "timeout: padded over limit is ignored"          0 shows nt 003601 "Nightfall menu         30s"
+expect "timeout: too big to compare is ignored"         0 shows nt 99999999999999999999 "Nightfall menu         30s"
+expect "splash-ms: padded non-default is its number"    0 shows nms 000002500 "at least 2500ms"
+expect "splash-ms: long padding is fine"                0 shows nms 00000000000000000000001500 "at least 1500ms"
+expect "splash-ms: padded exactly the limit"            0 shows nms 010000 "at least 10000ms"
+expect "splash-ms: padded over the limit is ignored"    0 shows nms 010001 "at least 1500ms"
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

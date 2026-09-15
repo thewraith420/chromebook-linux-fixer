@@ -40,6 +40,19 @@ die() { echo "error: $*" >&2; exit 1; }
 # init's `read -r v < file` produces. Empty if unreadable.
 first_line() { local v=""; read -r v < "$1" 2>/dev/null || true; printf '%s' "$v"; }
 
+# uint_within <value> <max>: print the value in canonical form and succeed if it
+# is digits only and at most max; fail otherwise. By VALUE, not length, as
+# Nightfall's init does: 000002500 is 2500 to it, and 0000...1500 of any length
+# is 1500. Leading zeros are stripped before comparing, so they never mean octal
+# and never overflow; what is still longer than max is over max.
+uint_within() {
+    local v="$1" max="$2"
+    case "$v" in ''|*[!0-9]*) return 1 ;; esac
+    v="${v#"${v%%[!0]*}"}"; v="${v:-0}"
+    [ "${#v}" -le "${#max}" ] && [ "$v" -le "$max" ] || return 1
+    printf '%s' "$v"
+}
+
 grub_current() {
     grep -hE '^GRUB_TIMEOUT=' "$GRUB_FILE" 2>/dev/null \
         | tail -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*//' | tr -d '"'
@@ -49,11 +62,9 @@ grub_current() {
 nf_timeout_effective() {
     [ -f "$NF_TIMEOUT_FILE" ] || { echo "$NF_DEFAULT_TIMEOUT|built-in default"; return; }
     local v; v=$(first_line "$NF_TIMEOUT_FILE")
-    case "$v" in
-        ''|*[!0-9]*) echo "$NF_DEFAULT_TIMEOUT|built-in default (file ignored: '$v')" ;;
-        *) if [ "$v" -le "$NF_MAX" ]; then echo "$v|$NF_TIMEOUT_FILE"
-           else echo "$NF_DEFAULT_TIMEOUT|built-in default (file ignored: ${v}s out of range)"; fi ;;
-    esac
+    local n
+    if n=$(uint_within "$v" "$NF_MAX"); then echo "$n|$NF_TIMEOUT_FILE"
+    else echo "$NF_DEFAULT_TIMEOUT|built-in default (file ignored: '$v')"; fi
 }
 nf_rotate_effective() {
     [ -f "$NF_ROTATE_FILE" ] || { echo "$NF_DEFAULT_ROTATE|default"; return; }
@@ -86,12 +97,9 @@ nf_splash_effective() {
 nf_splash_ms_effective() {
     [ -f "$NF_SPLASH_MS_FILE" ] || { echo "$NF_DEFAULT_SPLASH_MS|default"; return; }
     local v; v=$(first_line "$NF_SPLASH_MS_FILE")
-    case "$v" in
-        ''|*[!0-9]*) echo "$NF_DEFAULT_SPLASH_MS|default (file ignored: '$v')" ;;
-        *) if [ "${#v}" -le 5 ] && [ "$((10#$v))" -le "$NF_SPLASH_MS_MAX" ]; then
-               echo "$((10#$v))|$NF_SPLASH_MS_FILE"
-           else echo "$NF_DEFAULT_SPLASH_MS|default (file ignored: ${v}ms out of range)"; fi ;;
-    esac
+    local n
+    if n=$(uint_within "$v" "$NF_SPLASH_MS_MAX"); then echo "$n|$NF_SPLASH_MS_FILE"
+    else echo "$NF_DEFAULT_SPLASH_MS|default (file ignored: '$v')"; fi
 }
 
 cmd_show() {
@@ -119,7 +127,11 @@ cmd_show() {
     echo "Nightfall boot screens ${s%%|*}   (${s#*|})"
     if [ "${s%%|*}" = on ]; then
         echo "                         at least ${m%%|*}ms each   (${m#*|})"
-        [ "${m%%|*}" -lt 300 ] && echo "                         under ~300ms the spinner reads as a flicker"
+        # if, not `&&`: as the last command in cmd_show a false test would
+        # make `show` - and `chromebook-fixer boot-menu` - exit 1.
+        if [ "${m%%|*}" -lt 300 ]; then
+            echo "                         under ~300ms the spinner reads as a flicker"
+        fi
     else
         echo "                         off: the screen stays black while Nightfall"
         echo "                         starts and while the chosen kernel takes over"
@@ -174,7 +186,7 @@ cmd_nightfall() {
     case "$v" in
         ''|*[!0-9]*) die "Nightfall's timeout must be whole seconds, digits only (0-$NF_MAX)" ;;
     esac
-    [ "$v" -le "$NF_MAX" ] || die "Nightfall's timeout tops out at ${NF_MAX}s"
+    v=$(uint_within "$v" "$NF_MAX") || die "Nightfall's timeout tops out at ${NF_MAX}s"
     if [ "$v" = 0 ]; then
         echo "WARNING: 0 does not boot immediately - it DISABLES Nightfall's"
         echo "auto-boot, so the menu waits for a tap forever. On a machine with"
@@ -253,9 +265,8 @@ cmd_splash_ms() {
     case "$v" in
         ''|*[!0-9]*) die "boot screen time must be whole milliseconds, digits only (0-$NF_SPLASH_MS_MAX)" ;;
     esac
-    [ "${#v}" -le 5 ] && [ "$((10#$v))" -le "$NF_SPLASH_MS_MAX" ] \
+    v=$(uint_within "$v" "$NF_SPLASH_MS_MAX") \
         || die "boot screen time tops out at ${NF_SPLASH_MS_MAX}ms"
-    v=$((10#$v))
     echo "writing $v to $NF_SPLASH_MS_FILE"
     write_boot_file "$NF_SPLASH_MS_FILE" "$v"
     echo "a minimum, not a fixed length: time already on screen counts, and a"
