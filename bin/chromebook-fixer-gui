@@ -314,6 +314,10 @@ class Window(Adw.ApplicationWindow):
     NF_AUTOROTATE_FILE = "/boot/nightfall-autorotate"
     NF_DEFAULT_TIMEOUT = 30      # DEFAULT_TIMEOUT_SECS in ui/nightfall.c, 34cb3bc
     NF_DEFAULT_ROTATE = "270"    # init: ': "${NIGHTFALL_ROTATE:=270}"'
+    NF_SPLASH_FILE = "/boot/nightfall-splash"          # Nightfall 8bb40ea
+    NF_SPLASH_MS_FILE = "/boot/nightfall-splash-ms"
+    NF_DEFAULT_SPLASH_MS = 1500
+    SPLASH_FLICKER_MS = 300      # below this the spinner lasts only ~0.2s of work
     ROTATIONS = ("0", "90", "180", "270")
 
     @staticmethod
@@ -378,6 +382,26 @@ class Window(Adw.ApplicationWindow):
         if v in ("0", "off"):
             return False, "file"
         return True, "ignored"          # garbage keeps auto-rotate on
+
+    @classmethod
+    def _nightfall_splash(cls):
+        v = cls._first_line(cls.NF_SPLASH_FILE)
+        if v is None:
+            return True, "default"
+        if v in ("1", "on"):
+            return True, "file"
+        if v in ("0", "off"):
+            return False, "file"
+        return True, "ignored"          # only exactly 0/off turns them off
+
+    @classmethod
+    def _nightfall_splash_ms(cls):
+        v = cls._first_line(cls.NF_SPLASH_MS_FILE)
+        if v is None:
+            return cls.NF_DEFAULT_SPLASH_MS, "default"
+        if v.isascii() and v.isdigit() and int(v) <= 10000:
+            return int(v), "file"
+        return cls.NF_DEFAULT_SPLASH_MS, "ignored"
 
     @staticmethod
     def _nightfall_installed():
@@ -464,11 +488,35 @@ class Window(Adw.ApplicationWindow):
             "autorotate", ("on", "off")[h["autorotate_row"].get_selected()]))
         h["autorotate_row"].add_suffix(auto_set)
 
+        # Boot screens: the startup spinner and "Booting <entry>" together.
+        # Cosmetic, so no confirmation anywhere - only hints.
+        h["splash_row"] = Adw.ComboRow(
+            title="Boot screens", subtitle="checking…",
+            model=Gtk.StringList.new(["On", "Off"]))
+        splash_set = Gtk.Button(label="Set", valign=Gtk.Align.CENTER)
+        splash_set.connect("clicked", lambda _b: self._run_boot_menu(
+            "splash", ("on", "off")[h["splash_row"].get_selected()]))
+        h["splash_row"].add_suffix(splash_set)
+
+        h["splash_ms_row"] = Adw.ActionRow(title="Boot screen time",
+                                           subtitle="checking…")
+        h["splash_ms_spin"] = Gtk.SpinButton.new_with_range(0, 10000, 100)
+        h["splash_ms_spin"].set_valign(Gtk.Align.CENTER)
+        ms_set = Gtk.Button(label="Set", valign=Gtk.Align.CENTER)
+        ms_set.connect("clicked", lambda _b: self._run_boot_menu(
+            "splash-ms", int(h["splash_ms_spin"].get_value())))
+        ms_box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        ms_box.append(h["splash_ms_spin"])
+        ms_box.append(ms_set)
+        h["splash_ms_row"].add_suffix(ms_box)
+
         h["nightfall_rows"] = [
             timeout_row("nightfall", "Menu timeout", 0,
                         "0 never auto-boots - it waits for a tap forever"),
             h["rotate_row"],
             h["autorotate_row"],
+            h["splash_row"],
+            h["splash_ms_row"],
         ]
         for row in h["nightfall_rows"]:
             nf.add(row)
@@ -525,6 +573,27 @@ class Window(Adw.ApplicationWindow):
             h["autorotate_row"].set_subtitle(
                 f"off{self._source_note(asource)} — Nightfall keeps its "
                 f"starting rotation")
+
+        splash, ssource = self._nightfall_splash()
+        ms, msource = self._nightfall_splash_ms()
+        h["splash_row"].set_selected(0 if splash else 1)
+        h["splash_ms_spin"].set_value(ms)
+        if splash:
+            h["splash_row"].set_subtitle(
+                f"on{self._source_note(ssource)} — spinner until the menu, "
+                f"then “Booting …” until the kernel takes over")
+            note = ("under 300 ms the spinner reads as a flicker"
+                    if ms < self.SPLASH_FLICKER_MS else
+                    "time already on screen counts; a slow handoff stays longer")
+            h["splash_ms_row"].set_subtitle(
+                f"at least {ms} ms{self._source_note(msource)} — {note}")
+        else:
+            h["splash_row"].set_subtitle(
+                f"off{self._source_note(ssource)} — the screen stays black "
+                f"while Nightfall starts and hands off")
+            h["splash_ms_row"].set_subtitle(
+                f"{ms} ms{self._source_note(msource)} — does nothing while "
+                f"boot screens are off")
 
     def _run_boot_menu(self, flag, value, extra=()):
         cli = str(REPO / "bin" / "chromebook-fixer")

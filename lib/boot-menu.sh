@@ -6,8 +6,10 @@
 #   boot-menu.sh nightfall <seconds>     /boot/nightfall-timeout
 #   boot-menu.sh rotate <0|90|180|270>   /boot/nightfall-rotate
 #   boot-menu.sh autorotate <on|off>     /boot/nightfall-autorotate
+#   boot-menu.sh splash <on|off>         /boot/nightfall-splash
+#   boot-menu.sh splash-ms <0-10000>     /boot/nightfall-splash-ms
 #
-# GRUB's lives in /etc/default/grub and needs update-grub. Nightfall's three
+# GRUB's lives in /etc/default/grub and needs update-grub. Nightfall's
 # live as one-line files on /boot, read at boot by its init (34cb3bc, ac312cb)
 # - files rather than a rebuilt initramfs, so they survive rebuilding the image
 # and can be changed from a machine with no keyboard.
@@ -24,7 +26,11 @@ GRUB_FILE="${GRUB_FILE:-/etc/default/grub}"
 NF_TIMEOUT_FILE="${NF_TIMEOUT_FILE:-/boot/nightfall-timeout}"
 NF_ROTATE_FILE="${NF_ROTATE_FILE:-/boot/nightfall-rotate}"
 NF_AUTOROTATE_FILE="${NF_AUTOROTATE_FILE:-/boot/nightfall-autorotate}"
+NF_SPLASH_FILE="${NF_SPLASH_FILE:-/boot/nightfall-splash}"
+NF_SPLASH_MS_FILE="${NF_SPLASH_MS_FILE:-/boot/nightfall-splash-ms}"
 NF_MAX=3600              # Nightfall accepts 0..3600 inclusive
+NF_SPLASH_MS_MAX=10000   # nightfall-splash-ms accepts 0..10000 (8bb40ea)
+NF_DEFAULT_SPLASH_MS=1500
 NF_DEFAULT_TIMEOUT=30    # DEFAULT_TIMEOUT_SECS in ui/nightfall.c as of 34cb3bc
 NF_DEFAULT_ROTATE=270    # init's `: "${NIGHTFALL_ROTATE:=270}"`
 
@@ -66,6 +72,27 @@ nf_autorotate_effective() {
         *)     echo "on|default (file ignored: '$v')" ;;
     esac
 }
+# Anything but exactly 0/off leaves the screens on, so an unreadable or garbled
+# file never silently turns them off.
+nf_splash_effective() {
+    [ -f "$NF_SPLASH_FILE" ] || { echo "on|default"; return; }
+    local v; v=$(first_line "$NF_SPLASH_FILE")
+    case "$v" in
+        1|on)  echo "on|$NF_SPLASH_FILE" ;;
+        0|off) echo "off|$NF_SPLASH_FILE" ;;
+        *)     echo "on|default (file ignored: '$v')" ;;
+    esac
+}
+nf_splash_ms_effective() {
+    [ -f "$NF_SPLASH_MS_FILE" ] || { echo "$NF_DEFAULT_SPLASH_MS|default"; return; }
+    local v; v=$(first_line "$NF_SPLASH_MS_FILE")
+    case "$v" in
+        ''|*[!0-9]*) echo "$NF_DEFAULT_SPLASH_MS|default (file ignored: '$v')" ;;
+        *) if [ "${#v}" -le 5 ] && [ "$((10#$v))" -le "$NF_SPLASH_MS_MAX" ]; then
+               echo "$((10#$v))|$NF_SPLASH_MS_FILE"
+           else echo "$NF_DEFAULT_SPLASH_MS|default (file ignored: ${v}ms out of range)"; fi ;;
+    esac
+}
 
 cmd_show() {
     local g t r a
@@ -86,6 +113,16 @@ cmd_show() {
         echo "                         accelerometer reading, about 750ms in"
     else
         echo "                         auto-rotate off: the starting rotation is pinned"
+    fi
+    local s m
+    s=$(nf_splash_effective); m=$(nf_splash_ms_effective)
+    echo "Nightfall boot screens ${s%%|*}   (${s#*|})"
+    if [ "${s%%|*}" = on ]; then
+        echo "                         at least ${m%%|*}ms each   (${m#*|})"
+        [ "${m%%|*}" -lt 300 ] && echo "                         under ~300ms the spinner reads as a flicker"
+    else
+        echo "                         off: the screen stays black while Nightfall"
+        echo "                         starts and while the chosen kernel takes over"
     fi
 }
 
@@ -191,11 +228,51 @@ cmd_autorotate() {
     fi
 }
 
+cmd_splash() {
+    local v
+    # Normalised to 1/0 on disk, like autorotate.
+    case "$1" in
+        1|on)  v=1 ;;
+        0|off) v=0 ;;
+        *) die "boot screens must be on or off" ;;
+    esac
+    echo "writing $v to $NF_SPLASH_FILE"
+    write_boot_file "$NF_SPLASH_FILE" "$v"
+    if [ "$v" = 1 ]; then
+        echo "boot screens on: a spinner until the menu, and 'Booting <entry>'"
+        echo "until the chosen kernel takes over."
+    else
+        echo "boot screens off: the screen goes black in both of those gaps."
+    fi
+}
+
+cmd_splash_ms() {
+    local v="$1"
+    # Same acceptance as Nightfall's: digits only, 0..10000. Cosmetic, so this
+    # is about writing something Nightfall will use, not about safety.
+    case "$v" in
+        ''|*[!0-9]*) die "boot screen time must be whole milliseconds, digits only (0-$NF_SPLASH_MS_MAX)" ;;
+    esac
+    [ "${#v}" -le 5 ] && [ "$((10#$v))" -le "$NF_SPLASH_MS_MAX" ] \
+        || die "boot screen time tops out at ${NF_SPLASH_MS_MAX}ms"
+    v=$((10#$v))
+    echo "writing $v to $NF_SPLASH_MS_FILE"
+    write_boot_file "$NF_SPLASH_MS_FILE" "$v"
+    echo "a minimum, not a fixed length: time already on screen counts, and a"
+    echo "slow handoff keeps the screen up longer."
+    [ "$v" -lt 300 ] && echo "note: under ~300ms the spinner only lasts as long as the work (~0.2s here), which reads as a flicker."
+    local s; s=$(nf_splash_effective)
+    [ "${s%%|*}" = off ] && echo "note: boot screens are off, so this does nothing until they are on."
+    return 0
+}
+
 case "${1:-show}" in
     show)       cmd_show ;;
+    splash)     cmd_splash "${2:?usage: $0 splash <on|off>}" ;;
+    splash-ms)  cmd_splash_ms "${2:?usage: $0 splash-ms <0-10000>}" ;;
     grub)       cmd_grub "${2:?usage: $0 grub <seconds>}" ;;
     nightfall)  cmd_nightfall "${2:?usage: $0 nightfall <seconds>}" ;;
     rotate)     cmd_rotate "${2:?usage: $0 rotate <0|90|180|270>}" ;;
     autorotate) cmd_autorotate "${2:?usage: $0 autorotate <on|off>}" ;;
-    *) echo "usage: $0 {show|grub <s>|nightfall <s>|rotate <deg>|autorotate <on|off>}" >&2; exit 2 ;;
+    *) echo "usage: $0 {show|grub <s>|nightfall <s>|rotate <deg>|autorotate <on|off>|splash <on|off>|splash-ms <ms>}" >&2; exit 2 ;;
 esac

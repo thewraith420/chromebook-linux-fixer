@@ -254,15 +254,18 @@ def cmd_boot_menu(args, c):
         env["FIXER_YES"] = "1"
 
     worst = 0
-    settings = ("grub", "nightfall", "rotate", "autorotate")
-    for which in settings:
-        value = getattr(args, which)
+    # (argparse dest, boot-menu.sh subcommand)
+    settings = (("grub", "grub"), ("nightfall", "nightfall"), ("rotate", "rotate"),
+                ("autorotate", "autorotate"), ("splash", "splash"),
+                ("splash_ms", "splash-ms"))
+    for dest, which in settings:
+        value = getattr(args, dest)
         if value is None:
             continue
         sys.stdout.flush()
         worst = max(worst, subprocess.call([str(script), which, value], env=env))
 
-    if all(getattr(args, w) is None for w in settings):
+    if all(getattr(args, d) is None for d, _ in settings):
         sys.stdout.flush()
         return subprocess.call([str(script), "show"], env=env)
     if worst == 0:
@@ -429,6 +432,12 @@ def main():
                          "only until the first accelerometer reading)")
     pt.add_argument("--autorotate", choices=["on", "off"],
                     help="whether Nightfall follows the accelerometer")
+    pt.add_argument("--splash", choices=["on", "off"],
+                    help="Nightfall's boot screens: the startup spinner and "
+                         "'Booting <entry>'")
+    pt.add_argument("--splash-ms", metavar="MS",
+                    help="minimum time each boot screen stays up, 0-10000 "
+                         "(default 1500)")
     pt.add_argument("-y", "--yes", action="store_true",
                     help="accept a timeout that can strand a keyboardless machine")
 
