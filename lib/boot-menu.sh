@@ -288,7 +288,7 @@ cmd_splash_ms() {
         ''|*[!0-9]*) die "boot screen time must be whole milliseconds, digits only (0-$NF_SPLASH_MS_MAX)" ;;
     esac
     v=$(uint_within "$v" "$NF_SPLASH_MS_MAX") \
-        || die "boot screen time tops out at ${NF_SPLASH_MS_MAX}ms"
+        || die "boot screen time tops out at $(ms_to_secs "$NF_SPLASH_MS_MAX") seconds (${NF_SPLASH_MS_MAX}ms)"
     echo "writing $v to $NF_SPLASH_MS_FILE ($(ms_to_secs "$v")s)"
     write_boot_file "$NF_SPLASH_MS_FILE" "$v"
     echo "a minimum, not a fixed length: time already on screen counts, and a"
