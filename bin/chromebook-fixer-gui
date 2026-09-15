@@ -500,11 +500,15 @@ class Window(Adw.ApplicationWindow):
 
         h["splash_ms_row"] = Adw.ActionRow(title="Boot screen time",
                                            subtitle="checking…")
-        h["splash_ms_spin"] = Gtk.SpinButton.new_with_range(0, 10000, 100)
+        # Seconds in quarter steps; the file on /boot stays in milliseconds.
+        # Typed values between steps are kept rather than snapped, so a
+        # hand-set 1.6 s is shown and re-saved as it is.
+        h["splash_ms_spin"] = Gtk.SpinButton.new_with_range(0, 10, 0.25)
+        h["splash_ms_spin"].set_digits(2)
         h["splash_ms_spin"].set_valign(Gtk.Align.CENTER)
         ms_set = Gtk.Button(label="Set", valign=Gtk.Align.CENTER)
         ms_set.connect("clicked", lambda _b: self._run_boot_menu(
-            "splash-ms", int(h["splash_ms_spin"].get_value())))
+            "splash-ms", round(h["splash_ms_spin"].get_value() * 1000)))
         ms_box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
         ms_box.append(h["splash_ms_spin"])
         ms_box.append(ms_set)
@@ -577,22 +581,23 @@ class Window(Adw.ApplicationWindow):
         splash, ssource = self._nightfall_splash()
         ms, msource = self._nightfall_splash_ms()
         h["splash_row"].set_selected(0 if splash else 1)
-        h["splash_ms_spin"].set_value(ms)
+        h["splash_ms_spin"].set_value(ms / 1000)
+        secs = f"{ms / 1000:g} s"
         if splash:
             h["splash_row"].set_subtitle(
                 f"on{self._source_note(ssource)} — spinner until the menu, "
                 f"then “Booting …” until the kernel takes over")
-            note = ("under 300 ms the spinner reads as a flicker"
+            note = ("under 0.3 s the spinner reads as a flicker"
                     if ms < self.SPLASH_FLICKER_MS else
                     "time already on screen counts; a slow handoff stays longer")
             h["splash_ms_row"].set_subtitle(
-                f"at least {ms} ms{self._source_note(msource)} — {note}")
+                f"at least {secs}{self._source_note(msource)} — {note}")
         else:
             h["splash_row"].set_subtitle(
                 f"off{self._source_note(ssource)} — the screen stays black "
                 f"while Nightfall starts and hands off")
             h["splash_ms_row"].set_subtitle(
-                f"{ms} ms{self._source_note(msource)} — does nothing while "
+                f"{secs}{self._source_note(msource)} — does nothing while "
                 f"boot screens are off")
 
     def _run_boot_menu(self, flag, value, extra=()):

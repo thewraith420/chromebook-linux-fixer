@@ -257,7 +257,7 @@ def cmd_boot_menu(args, c):
     # (argparse dest, boot-menu.sh subcommand)
     settings = (("grub", "grub"), ("nightfall", "nightfall"), ("rotate", "rotate"),
                 ("autorotate", "autorotate"), ("splash", "splash"),
-                ("splash_ms", "splash-ms"))
+                ("splash_secs", "splash-secs"), ("splash_ms", "splash-ms"))
     for dest, which in settings:
         value = getattr(args, dest)
         if value is None:
@@ -435,6 +435,9 @@ def main():
     pt.add_argument("--splash", choices=["on", "off"],
                     help="Nightfall's boot screens: the startup spinner and "
                          "'Booting <entry>'")
+    pt.add_argument("--splash-secs", metavar="SECS",
+                    help="minimum time each boot screen stays up, in seconds, "
+                         "0-10 (e.g. 1.25; default 1.5)")
     pt.add_argument("--splash-ms", metavar="MS",
                     help="minimum time each boot screen stays up, 0-10000 "
                          "(default 1500)")

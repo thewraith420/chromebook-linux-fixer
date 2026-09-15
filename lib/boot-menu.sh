@@ -8,6 +8,7 @@
 #   boot-menu.sh autorotate <on|off>     /boot/nightfall-autorotate
 #   boot-menu.sh splash <on|off>         /boot/nightfall-splash
 #   boot-menu.sh splash-ms <0-10000>     /boot/nightfall-splash-ms
+#   boot-menu.sh splash-secs <0-10>      the same, in seconds (1.25 -> 1250)
 #
 # GRUB's lives in /etc/default/grub and needs update-grub. Nightfall's
 # live as one-line files on /boot, read at boot by its init (34cb3bc, ac312cb)
@@ -94,6 +95,27 @@ nf_splash_effective() {
         *)     echo "on|default (file ignored: '$v')" ;;
     esac
 }
+# ms_to_secs 1500 -> 1.5, 250 -> 0.25, 10000 -> 10. The file stays in
+# milliseconds, which is what Nightfall reads; people think in seconds.
+ms_to_secs() {
+    local f; f=$(printf '%03d' $(($1 % 1000)))
+    f="${f%"${f##*[!0]}"}"
+    printf '%s%s' $(($1 / 1000)) "${f:+.$f}"
+}
+# secs_to_ms 1.25 -> 1250. Up to three decimals, so every millisecond value is
+# reachable; fails on anything else.
+secs_to_ms() {
+    local w="${1%%.*}" f=""
+    case "$1" in *.*) f="${1#*.}" ;; esac
+    case "$w" in ''|*[!0-9]*) [ -z "$w" ] && [ -n "$f" ] && w=0 || return 1 ;; esac
+    case "$f" in *[!0-9]*) return 1 ;; esac
+    [ "${#f}" -le 3 ] || return 1
+    case "$1" in *.) return 1 ;; esac
+    w="${w#"${w%%[!0]*}"}"; w="${w:-0}"
+    [ "${#w}" -le 2 ] || return 1
+    f=$(printf '%-3s' "$f"); f="${f// /0}"
+    printf '%s' $((w * 1000 + 10#$f))
+}
 nf_splash_ms_effective() {
     [ -f "$NF_SPLASH_MS_FILE" ] || { echo "$NF_DEFAULT_SPLASH_MS|default"; return; }
     local v; v=$(first_line "$NF_SPLASH_MS_FILE")
@@ -126,11 +148,11 @@ cmd_show() {
     s=$(nf_splash_effective); m=$(nf_splash_ms_effective)
     echo "Nightfall boot screens ${s%%|*}   (${s#*|})"
     if [ "${s%%|*}" = on ]; then
-        echo "                         at least ${m%%|*}ms each   (${m#*|})"
+        echo "                         at least $(ms_to_secs "${m%%|*}")s each   (${m#*|})"
         # if, not `&&`: as the last command in cmd_show a false test would
         # make `show` - and `chromebook-fixer boot-menu` - exit 1.
         if [ "${m%%|*}" -lt 300 ]; then
-            echo "                         under ~300ms the spinner reads as a flicker"
+            echo "                         under ~0.3s the spinner reads as a flicker"
         fi
     else
         echo "                         off: the screen stays black while Nightfall"
@@ -267,11 +289,13 @@ cmd_splash_ms() {
     esac
     v=$(uint_within "$v" "$NF_SPLASH_MS_MAX") \
         || die "boot screen time tops out at ${NF_SPLASH_MS_MAX}ms"
-    echo "writing $v to $NF_SPLASH_MS_FILE"
+    echo "writing $v to $NF_SPLASH_MS_FILE ($(ms_to_secs "$v")s)"
     write_boot_file "$NF_SPLASH_MS_FILE" "$v"
     echo "a minimum, not a fixed length: time already on screen counts, and a"
     echo "slow handoff keeps the screen up longer."
-    [ "$v" -lt 300 ] && echo "note: under ~300ms the spinner only lasts as long as the work (~0.2s here), which reads as a flicker."
+    if [ "$v" -lt 300 ]; then
+        echo "note: under ~0.3s the spinner only lasts as long as the work (~0.2s here), which reads as a flicker."
+    fi
     local s; s=$(nf_splash_effective)
     [ "${s%%|*}" = off ] && echo "note: boot screens are off, so this does nothing until they are on."
     return 0
@@ -281,9 +305,13 @@ case "${1:-show}" in
     show)       cmd_show ;;
     splash)     cmd_splash "${2:?usage: $0 splash <on|off>}" ;;
     splash-ms)  cmd_splash_ms "${2:?usage: $0 splash-ms <0-10000>}" ;;
+    splash-secs)
+        ms=$(secs_to_ms "${2:?usage: $0 splash-secs <0-10, e.g. 1.25>}") \
+            || die "boot screen time must be seconds from 0 to 10, e.g. 1.25"
+        cmd_splash_ms "$ms" ;;
     grub)       cmd_grub "${2:?usage: $0 grub <seconds>}" ;;
     nightfall)  cmd_nightfall "${2:?usage: $0 nightfall <seconds>}" ;;
     rotate)     cmd_rotate "${2:?usage: $0 rotate <0|90|180|270>}" ;;
     autorotate) cmd_autorotate "${2:?usage: $0 autorotate <on|off>}" ;;
-    *) echo "usage: $0 {show|grub <s>|nightfall <s>|rotate <deg>|autorotate <on|off>|splash <on|off>|splash-ms <ms>}" >&2; exit 2 ;;
+    *) echo "usage: $0 {show|grub <s>|nightfall <s>|rotate <deg>|autorotate <on|off>|splash <on|off>|splash-ms <ms>|splash-secs <s>}" >&2; exit 2 ;;
 esac

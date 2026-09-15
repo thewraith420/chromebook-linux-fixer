@@ -97,10 +97,29 @@ expect "timeout: padded value is its number"            0 shows nt 000000120 "Ni
 expect "timeout: padded 0 still disables auto-boot"     0 shows nt 0000 "auto-boot DISABLED"
 expect "timeout: padded over limit is ignored"          0 shows nt 003601 "Nightfall menu         30s"
 expect "timeout: too big to compare is ignored"         0 shows nt 99999999999999999999 "Nightfall menu         30s"
-expect "splash-ms: padded non-default is its number"    0 shows nms 000002500 "at least 2500ms"
-expect "splash-ms: long padding is fine"                0 shows nms 00000000000000000000001500 "at least 1500ms"
-expect "splash-ms: padded exactly the limit"            0 shows nms 010000 "at least 10000ms"
-expect "splash-ms: padded over the limit is ignored"    0 shows nms 010001 "at least 1500ms"
+expect "splash-ms: padded non-default is its number"    0 shows nms 000002500 "at least 2.5s each"
+expect "splash-ms: long padding is fine"                0 shows nms 00000000000000000000001500 "at least 1.5s each"
+expect "splash-ms: padded exactly the limit"            0 shows nms 010000 "at least 10s each"
+expect "splash-ms: padded over the limit is ignored"    0 shows nms 010001 "at least 1.5s each"
+expect "splash-ms: quarter second shown as 0.25"        0 shows nms 250 "at least 0.25s each"
+expect "splash-ms: odd value shown exactly"             0 shows nms 1600 "at least 1.6s each"
+
+# splash-secs writes milliseconds, exactly.
+secs() {    # secs <input> <file content expected>
+    rm -f "$T/nms"
+    NF_SPLASH_MS_FILE="$T/nms" NF_SPLASH_FILE="$T/x" FIXER_SUDO=env "$BM" splash-secs "$1" || return 9
+    [ "$(cat "$T/nms")" = "$2" ]
+}
+expect "splash-secs: 1.25 -> 1250"                      0 secs 1.25 1250
+expect "splash-secs: .75 -> 750"                        0 secs .75 750
+expect "splash-secs: 10 -> 10000"                       0 secs 10 10000
+expect "splash-secs: 0 -> 0"                            0 secs 0 0
+expect "splash-secs: 02.5 -> 2500"                      0 secs 02.5 2500
+expect "splash-secs: 10.001 refused"                    9 secs 10.001 x
+expect "splash-secs: 1.2345 refused"                    9 secs 1.2345 x
+expect "splash-secs: -1 refused"                        9 secs -1 x
+expect "splash-secs: 1. refused"                        9 secs 1. x
+expect "splash-secs: abc refused"                       9 secs abc x
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
