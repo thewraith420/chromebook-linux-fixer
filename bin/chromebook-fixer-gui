@@ -150,13 +150,17 @@ class Window(Adw.ApplicationWindow):
         self._status = {}
         self._sweeping = False
         self._resweep = False
+        self._fitted = False        # has the post-detection re-fit happened?
 
         self.nav = Adw.NavigationView()
         self.nav.add(self._build_root())
         self.toasts = Adw.ToastOverlay(child=self.nav)
         self.set_content(self.toasts)
-        # Now that the page exists, open as tall as it actually is.
-        self.set_default_size(760, self._fit_to_content())
+        # Now that the page exists, open as tall as it actually is - or as tall
+        # as the last run worked out, which is the same number without the
+        # visible jump when detection lands. See _refit.
+        self._set_height = self._remembered_height() or self._fit_to_content()
+        self.set_default_size(760, self._set_height)
 
         GLib.idle_add(self.refresh_all)
 
@@ -337,10 +341,11 @@ class Window(Adw.ApplicationWindow):
             fixes = self.fixes_by_category.get(key)
             if not fixes:
                 continue
-            # A subtitle from the start, not only once the counts arrive: the
-            # window is sized by measuring this page before anything has been
-            # checked, and a row without a subtitle is shorter.
-            row = Adw.ActionRow(title=label, subtitle="checking…", activatable=True)
+            # The summary from the start, not only once a refresh runs: this
+            # page is measured to size the window, and it has to be measured
+            # with the text it will actually carry.
+            subtitle, _warn = self._category_summary(fixes)
+            row = Adw.ActionRow(title=label, subtitle=subtitle, activatable=True)
             row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
             row.connect("activated",
                         lambda _r, k=key, l=label: self._open_category(k, l))
@@ -374,6 +379,10 @@ class Window(Adw.ApplicationWindow):
         rows = []
         for fix in self.fixes_by_category.get(key, ()):
             row = FixRow(fix, self)
+            # From the cache, so a page is measured at the height it will have
+            # once opened - a FixRow's subtitle grows from the fix id to the
+            # first line of its detail, which is taller.
+            row.refresh()
             rows.append(row)
             group.add(row)
         page.add(group)
@@ -764,7 +773,59 @@ class Window(Adw.ApplicationWindow):
 
     def _sweep_done(self):
         self._sweeping = False
+        self._refit()
         return False
+
+    HEIGHT_FILE = Path(GLib.get_user_cache_dir()) / "chromebook-fixer" / "window-height"
+
+    def _remembered_height(self):
+        """
+        The height the last run settled on, or None.
+
+        Only ever a starting point: _refit measures again and corrects it, so a
+        stale number costs one resize rather than a wrong window forever.
+        """
+        try:
+            value = int(self.HEIGHT_FILE.read_text().strip())
+        except (OSError, ValueError):
+            return None
+        cap = self._screen_cap_height()
+        return value if 600 <= value <= cap else None
+
+    def _remember_height(self, height):
+        try:
+            self.HEIGHT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.HEIGHT_FILE.write_text(f"{height}\n")
+        except OSError:
+            pass          # a window that cannot remember its size still works
+
+    def _refit(self):
+        """
+        Grow the window once, after the first sweep, if the page outgrew the
+        size it opened at.
+
+        The opening size is measured before any fix has been checked, because
+        checking takes seconds and the window has to appear now. But detection
+        is what makes the rows tall: a FixRow's subtitle starts as the fix id
+        and becomes "id — <first line of detail>", which wraps, and the same
+        goes for every count and settings row. The estimate was a smidge short
+        of what the page then needed, so the last group sat just off the
+        bottom. Measuring again once the real text is in place is the only
+        honest fix; the alternative is guessing at text that does not exist yet.
+
+        Once only, and only ever taller, so this cannot fight a window the user
+        has deliberately made small.
+        """
+        if self._fitted:
+            return
+        self._fitted = True
+        want = self._fit_to_content()
+        if self.get_height() not in (0, self._set_height):
+            return        # the user has already resized it; leave it alone
+        if want != self._set_height:
+            self._set_height = want
+            self.set_default_size(760, want)
+        self._remember_height(want)
 
     def _refresh_categories(self):
         """
@@ -775,46 +836,45 @@ class Window(Adw.ApplicationWindow):
         one place, and means nothing can look calm while something inside it
         needs attention.
         """
-        def tally(fixes):
-            """(needed, applied, checked) from the cache - no subprocesses."""
-            needed = applied = checked = 0
-            for fix in fixes:
-                found = self._status.get(fix.id)
-                if found is None:
-                    continue
-                checked += 1
-                if found[0] == "needed":
-                    needed += 1
-                elif found[0] == "applied":
-                    applied += 1
-            return needed, applied, checked
-
         for _key, (row, fixes) in self.category_rows.items():
-            needed, applied, checked = tally(fixes)
-            total = len(fixes)
-            if checked < total and not needed:
-                row.set_subtitle(f"checking… ({checked} of {total})")
-            elif needed:
-                row.set_subtitle(f"{needed} of {total} need attention")
+            subtitle, warn = self._category_summary(fixes)
+            row.set_subtitle(subtitle)
+            if warn:
                 row.remove_css_class("dim-label")
-            else:
-                row.set_subtitle(f"{total} fix{'es' if total != 1 else ''}, "
-                                 f"{applied} applied")
 
         every = [f for fixes in self.fixes_by_category.values() for f in fixes]
-        needed, applied, checked = tally(every)
-        if checked < len(every) and not needed:
-            self._fixes_row.set_subtitle(f"checking… ({checked} of {len(every)})")
-            self._fixes_row.remove_css_class("warning")
-        elif needed:
-            self._fixes_row.set_subtitle(
-                f"{needed} of {len(every)} need attention")
+        subtitle, warn = self._category_summary(every, lead="camera, display, "
+                                                "audio and the rest — ")
+        self._fixes_row.set_subtitle(subtitle)
+        if warn:
             self._fixes_row.add_css_class("warning")
         else:
-            self._fixes_row.set_subtitle(
-                f"camera, display, audio and the rest — nothing needed, "
-                f"{applied} applied")
             self._fixes_row.remove_css_class("warning")
+
+    def _category_summary(self, fixes, lead=""):
+        """
+        (subtitle, needs attention) for a row standing in for several fixes.
+
+        Counted from the cache, never by running detection: this is called
+        while building pages as well as while refreshing them.
+        """
+        needed = applied = checked = 0
+        for fix in fixes:
+            found = self._status.get(fix.id)
+            if found is None:
+                continue
+            checked += 1
+            if found[0] == "needed":
+                needed += 1
+            elif found[0] == "applied":
+                applied += 1
+        total = len(fixes)
+        if needed:
+            return f"{lead}{needed} of {total} need attention", True
+        if checked < total:
+            return f"checking… ({checked} of {total})", False
+        return (f"{lead}nothing needed, {applied} applied" if lead else
+                f"{total} fix{'es' if total != 1 else ''}, {applied} applied"), False
 
     @staticmethod
     def _row(title, subtitle):
