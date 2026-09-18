@@ -5,6 +5,7 @@
 #   kernels.sh list [--tab]
 #   kernels.sh remove <release>
 #   kernels.sh default <release>|--clear|--show
+#   kernels.sh install <tarball> [--default]
 #
 # Yes, this is userspace work: a kernel is /boot/vmlinuz-<release>, its
 # initrd, its /lib/modules tree and a GRUB entry. The care is in WHICH one and
@@ -16,6 +17,20 @@
 # installed, so the next upgrade or `apt --fix-broken` can put it back or trip
 # over the gap. Packaged kernels therefore go out through apt, unpackaged ones
 # by deleting exactly what was installed.
+#
+# INSTALL. Nightfall's install-kernel.sh does this too, but from initramfs
+# with the real root mounted and not in use, via chroot - neither applies here,
+# since the fixer runs ON the live system and IS the real root. So this talks
+# to depmod/update-initramfs/update-grub directly, no chroot, mirroring what
+# both install-kernel.sh (picker) and BobZKernel's own portable install.sh
+# (interactive, multi-distro) do at the point they touch disk. Accepts either
+# tarball shape - Nightfall's bare boot/+lib/, or BobZKernel's portable
+# installer with VERSION/install.sh/uninstall.sh alongside - since this never
+# runs the bundled install.sh; only boot/vmlinuz-<release>,
+# boot/{System.map,config}-<release> and lib/modules/<release>/ are ever
+# extracted, by exact member name from the tar listing, never a blanket
+# "./boot ./lib". A downloaded tarball is not a trusted input the way an
+# initramfs-embedded one implicitly is.
 #
 # GUARDS, in the order they matter - this is the one thing here that can leave
 # a machine that will not boot:
@@ -33,6 +48,12 @@ BOOT="${FIXER_BOOT_DIR:-/boot}"
 MODULES="${FIXER_MODULES_DIR:-/lib/modules}"
 NF_DEFAULT_FILE="${NF_DEFAULT_FILE:-$BOOT/nightfall-default}"
 GRUB_CFG="${FIXER_GRUB_CFG:-/boot/grub/grub.cfg}"
+FIXER_REPO_HINT="${FIXER_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# Where install extracts a tarball's boot/ and lib/ paths onto: always / in
+# production, since FIXER_BOOT_DIR/FIXER_MODULES_DIR default to /boot and
+# /lib/modules - both already anchored there. Overridable so tests can point
+# every one of these at the same fake root without writing to the real one.
+INSTALL_ROOT="${FIXER_INSTALL_ROOT:-/}"
 RUNNING="${FIXER_RUNNING_KERNEL:-$(uname -r)}"
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -239,10 +260,163 @@ update-grub || {
 ROOT
 }
 
+cmd_install() {
+    local tarball="$1" set_default="${2:-}"
+    [ -f "$tarball" ] || die "no such file: $tarball"
+    command -v tar >/dev/null 2>&1 || die "tar is not available"
+
+    # The release from boot/vmlinuz-<release> inside the archive, not the
+    # filename - the filename is a label, this is what depmod/update-initramfs
+    # must be given exactly, and it is what everything below keys on.
+    local listing release
+    listing=$(tar tzf "$tarball" 2>/dev/null) || die "could not read $tarball - not a gzipped tar?"
+    release=$(printf '%s\n' "$listing" | grep -E '(^|/)boot/vmlinuz-' | head -n1 \
+              | sed -E 's#.*/boot/vmlinuz-##')
+    [ -n "$release" ] || die "no boot/vmlinuz-* inside $tarball - not a kernel tarball?"
+    # Tarball-controlled input from here on: refuse a release that would
+    # escape /boot or /lib/modules/<release> once substituted into a path.
+    case "$release" in */*|.|..|"") die "implausible kernel release inside the archive: '$release'" ;; esac
+    echo "kernel release: $release"
+
+    # Exact member names, not a glob against the live filesystem: this listing
+    # is the tarball's own idea of what exists, from before anything is
+    # trusted. lib/modules/<release>/ is matched as a directory prefix so its
+    # whole tree - kernel/, modules.*, the build symlink if present - comes
+    # along; nothing else under lib/ or boot/ does.
+    local members; members=$(mktemp)
+    printf '%s\n' "$listing" | grep -E "(^|/)boot/(vmlinuz|System\.map|config)-${release}\$|(^|/)lib/modules/${release}(/|\$)" \
+        > "$members"
+    [ -s "$members" ] || { rm -f "$members"; die "found the release name but no matching members - refusing"; }
+    # Path-traversal paranoia: nothing here should legitimately need '..' or
+    # start with '/', and a tarball is not a trusted input.
+    if grep -qE '(^|/)\.\./|^/' "$members"; then
+        rm -f "$members"; die "the archive contains an unsafe path for $release - refusing to extract anything"
+    fi
+
+    local already=""
+    [ -f "$BOOT/vmlinuz-$release" ] && already=1
+    local running_now=""
+    [ "$release" = "$RUNNING" ] && running_now=1
+    if [ -n "$already" ]; then
+        echo "note: $release is already installed - reinstalling over it"
+    fi
+    if [ -n "$running_now" ]; then
+        echo "WARNING: this is the kernel currently running. Its modules can be"
+        echo "loaded on demand while it runs; overwriting them underneath it is"
+        echo "not something an interrupted run can be trusted to leave in a good"
+        echo "state. Safer to boot a different kernel first if you can."
+    fi
+
+    # A second, collapsed list for the actual extraction. GNU tar recurses a
+    # directory member automatically, so ALSO listing that directory's own
+    # children makes it go looking for them again once they are already on
+    # disk - "Not found in archive", for files that were in fact just
+    # written. Sort puts a directory entry before anything nested under it (a
+    # prefix always sorts first), then drop any line that falls under a
+    # directory already kept; the size math below still uses the uncollapsed
+    # $members, since a dropped child's size would otherwise go uncounted.
+    local extract_members; extract_members=$(mktemp)
+    sort "$members" | awk '
+        keep != "" && index($0, keep) == 1 { next }
+        { print; if ($0 ~ /\/$/) keep = $0 }
+    ' > "$extract_members"
+
+    # Space, before extracting: a kernel + modules tree is hundreds of
+    # megabytes, and finding that out 90% through a slow initramfs rebuild
+    # wastes minutes and can leave a half-written image. /boot and
+    # /lib/modules are not always the same filesystem.
+    # -F: members are matched as literal substrings, not patterns - they can
+    # contain regex metacharacters (the release string has dots in it), and
+    # escaping them for -F would be wrong twice over, since -F never treats
+    # its input as regex to begin with. That combination was tried and
+    # silently matched nothing, so every install thought it needed 1KB.
+    local need_k; need_k=$(awk -F'\t' '{ n=split($0,f," "); sum += f[3] } END { print int(sum/1024)+1 }' \
+        <(tar tzvf "$tarball" 2>/dev/null | grep -F -f "$members"))
+    local boot_free_k mod_free_k
+    boot_free_k=$(df -Pk "$BOOT" 2>/dev/null | awk 'NR==2{print $4}')
+    mod_free_k=$(df -Pk "$MODULES" 2>/dev/null | awk 'NR==2{print $4}')
+    if [ -n "${need_k:-}" ] && [ -n "${boot_free_k:-}" ] && [ -n "${mod_free_k:-}" ]; then
+        if [ "$need_k" -gt "$boot_free_k" ] || [ "$need_k" -gt "$mod_free_k" ]; then
+            rm -f "$members" "$extract_members"
+            die "need about $(human $((need_k * 1024))), but only $(human $((boot_free_k * 1024))) free on $BOOT and $(human $((mod_free_k * 1024))) free on $MODULES"
+        fi
+    fi
+
+    echo "extracting $release (this takes a moment)"
+    local default_path=""
+    [ -n "$set_default" ] && default_path=$(grub_path "$release")
+    if ! $SUDO bash -s -- "$tarball" "$extract_members" "$BOOT" "$MODULES" "$release" \
+                          "$NF_DEFAULT_FILE" "$default_path" "$GRUB_CFG" "$INSTALL_ROOT" <<'ROOT'
+set -euo pipefail
+tarball="$1"; members="$2"; boot="$3"; modules="$4"; release="$5"
+marker="$6"; default_path="$7"; cfg="$8"; install_root="$9"
+
+command -v update-grub >/dev/null 2>&1 || {
+    echo "error: update-grub is not available; refusing to extract anything" >&2; exit 1; }
+
+# The archive's own paths (boot/..., lib/modules/...) are already the
+# destination layout relative to install_root, same as both existing
+# installers (which extract relative to / or a chroot's mount point).
+mkdir -p "$install_root"
+tar xzf "$tarball" -C "$install_root" -T "$members" || {
+    echo "error: extract failed - anything already written is a partial state;" >&2
+    echo "re-run this install to overwrite it cleanly." >&2; exit 1; }
+
+[ -f "$boot/vmlinuz-$release" ]      || { echo "error: vmlinuz-$release missing after extract" >&2; exit 1; }
+[ -d "$modules/$release" ]           || { echo "error: modules for $release missing after extract" >&2; exit 1; }
+sync
+
+echo "depmod $release"
+depmod -a "$release" || { echo "error: depmod failed" >&2; exit 1; }
+
+# The slow one - minutes on eMMC. Without this the kernel cannot mount root on
+# this hardware (storage/graphics are modules), so a failure here means the
+# release must not be reported as installed successfully, even though its
+# files are on disk.
+echo "update-initramfs -c -k $release (slow - do not power off)"
+update-initramfs -c -k "$release" || {
+    echo "error: update-initramfs failed - $release is NOT bootable." >&2
+    echo "Its files are on disk; other kernels are untouched. Re-run install to try again." >&2
+    exit 1; }
+
+echo "update-grub"
+update-grub || { echo "error: update-grub failed - $release may not appear in the menu; run 'sudo update-grub'" >&2; exit 1; }
+
+if [ -n "$default_path" ]; then
+    path=$(awk -v r="vmlinuz-$release" '$1 == "linux" && $2 ~ r"$" { print $2; exit }' "$cfg" 2>/dev/null)
+    printf '%s
+' "${path:-$default_path}" > "$marker"
+    chmod 0644 "$marker"
+    echo "set as Nightfall's default: $(cat "$marker")"
+fi
+
+sync
+echo "installed $release successfully"
+ROOT
+    then
+        rm -f "$members"
+        return 1
+    fi
+    rm -f "$members"
+
+    echo "it will appear in Nightfall's kernel list on the next boot"
+    if command -v dkms >/dev/null 2>&1 && [ -x "$FIXER_REPO_HINT/dkms-support.sh" ]; then
+        "$FIXER_REPO_HINT/dkms-support.sh" --kernel "$release" >/dev/null 2>&1 \
+            && echo "note: an out-of-tree module here can be built for $release with: sudo dkms autoinstall -k $release" \
+            || true
+    fi
+    [ -z "$set_default" ] && echo "not set as Nightfall's default; see: $0 default $release"
+    return 0
+}
+
 case "${1:-list}" in
     list)    cmd_list "${2:-}" ;;
     remove)  cmd_remove "${2:?usage: $0 remove <release>}" ;;
     default) cmd_default "${2:?usage: $0 default <release>|--clear|--show}" ;;
-    *) echo "usage: $0 {list [--tab]|remove <release>|default <release>|--clear|--show}" >&2
+    install) shift
+             tarball="${1:?usage: $0 install <tarball> [--default]}"; shift || true
+             set_default=""; [ "${1:-}" = --default ] && set_default=1
+             cmd_install "$tarball" "$set_default" ;;
+    *) echo "usage: $0 {list [--tab]|remove <release>|default <release>|--clear|--show|install <tarball> [--default]}" >&2
        exit 2 ;;
 esac

@@ -16,7 +16,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "lib"))
@@ -336,10 +336,67 @@ class Window(Adw.ApplicationWindow):
             title="Kernels",
             description="What is installed, and which one Nightfall boots "
                         "first. Removing one frees its modules and initrd too.")
+
+        install_row = Adw.ActionRow(
+            title="Install a kernel",
+            subtitle="From a tarball holding boot/vmlinuz-<release> and "
+                     "lib/modules/<release>/ - a BobZKernel portable "
+                     "installer works as-is.")
+        install_row.set_subtitle_lines(0)
+        install_btn = Gtk.Button(label="Choose file…", valign=Gtk.Align.CENTER)
+        install_btn.connect("clicked", lambda _b: self._pick_kernel_tarball())
+        install_row.add_suffix(install_btn)
+        self._kernels_group.add(install_row)
+
         self._kernel_rows = []
         self._kernels_hint = Adw.ActionRow(title="Looking for installed kernels…")
         self._kernels_group.add(self._kernels_hint)
         return self._kernels_group
+
+    def _pick_kernel_tarball(self):
+        tar_filter = Gtk.FileFilter(name="Kernel tarball (*.tar.gz, *.tgz)")
+        tar_filter.add_pattern("*.tar.gz")
+        tar_filter.add_pattern("*.tgz")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(tar_filter)
+        dialog = Gtk.FileDialog(title="Choose a kernel tarball", filters=filters,
+                                default_filter=tar_filter)
+
+        def chosen(dlg, result):
+            try:
+                gfile = dlg.open_finish(result)
+            except GLib.Error:
+                return                    # cancelled
+            path = gfile.get_path()
+            if path:
+                self._confirm_install_kernel(path)
+        dialog.open(self, None, chosen)
+
+    def _confirm_install_kernel(self, path):
+        name = Path(path).name
+        dialog = Adw.MessageDialog(
+            transient_for=self, modal=True,
+            heading=f"Install {name}?",
+            body="Extracts the kernel and its modules, then rebuilds the "
+                "initramfs and GRUB's menu - a few minutes, mostly reading "
+                "and writing to the disk this runs from. Do not power off "
+                "while it runs.\n\nAdditive: every other installed kernel "
+                "is left exactly as it is, including the one you would fall "
+                "back to if something goes wrong.")
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("go", "Install")
+        dialog.set_response_appearance("go", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r:
+                       self._install_kernel(path) if r == "go" else None)
+        dialog.present()
+
+    def _install_kernel(self, path):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        self._run_in_window(f"install kernel from {Path(path).name}",
+                            [cli, "--no-colour", "kernels", "--install", path],
+                            stream=True, refresh_after=True)
 
     @staticmethod
     def _scan_kernels():

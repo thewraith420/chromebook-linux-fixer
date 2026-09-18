@@ -330,6 +330,17 @@ def cmd_kernels(args, c):
         return subprocess.call([str(script), "default", "--clear"], env=env)
     if args.default:
         return subprocess.call([str(script), "default", args.default], env=env)
+    if args.install:
+        # kernels.sh install does its own talking - the release it found,
+        # whether it is already there, the running-kernel warning, the space
+        # check - all before the slow part, and all of it belongs streamed
+        # live rather than captured: update-initramfs can take minutes, and
+        # "do not power off" is not a warning to show after the fact.
+        argv = [str(script), "install", args.install]
+        if args.set_default:
+            argv.append("--default")
+        sys.stdout.flush()
+        return subprocess.call(argv, env=env)
     if not args.remove:
         rc = subprocess.call([str(script), "list"], env=env)
         print()
@@ -600,6 +611,11 @@ def main():
 
     pk = sub.add_parser("kernels",
                         help="installed kernels, and which one Nightfall boots")
+    pk.add_argument("--install", metavar="TARBALL",
+                    help="install a kernel from a tarball "
+                         "(boot/vmlinuz-<release> + lib/modules/<release>/)")
+    pk.add_argument("--set-default", action="store_true",
+                    help="with --install: also make it Nightfall's default")
     pk.add_argument("--remove", metavar="RELEASE",
                     help="remove this kernel (asks for the release to be typed)")
     pk.add_argument("--default", metavar="RELEASE",
