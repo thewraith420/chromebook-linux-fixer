@@ -276,7 +276,11 @@ class Window(Adw.ApplicationWindow):
         # Home is built once and never rebuilt, so these handles are the ones
         # _refresh_boot_menu should always write to.
         self.boot = handles
-        for group in settings:
+        nf_settings, grub_settings = settings[0], settings[1:]
+        page.add(nf_settings)
+        backups = self._build_backups()
+        page.add(backups)
+        for group in grub_settings:
             page.add(group)
 
         info = Adw.PreferencesGroup(title="This machine")
@@ -302,7 +306,8 @@ class Window(Adw.ApplicationWindow):
 
         # Kept so the window can be sized from what is actually on the page.
         self._root_page = page
-        self._root_groups = [nf, *settings, info, fixes_group]
+        self._root_groups = [nf, nf_settings, backups, *grub_settings,
+                             info, fixes_group]
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -315,6 +320,112 @@ class Window(Adw.ApplicationWindow):
         toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
 
         return Adw.NavigationPage(child=toolbar, title="Nightfall")
+
+    def _build_backups(self):
+        """
+        The backups Nightfall has taken, with a way to delete one.
+
+        Taking and restoring stay in Nightfall, which does both with the real
+        root mounted read-only - a backup of a running system catches it
+        mid-write, and a restore would overwrite the system performing it.
+        Seeing them and freeing space is safe from here, and it is the part
+        that is otherwise a reboot into the boot manager.
+        """
+        self._backups_group = Adw.PreferencesGroup(
+            title="Backups",
+            description="Taken by Nightfall onto an external drive. "
+                        "Nightfall takes and restores them; this frees space.")
+        self._backup_rows = []
+        self._backups_hint = Adw.ActionRow(title="Checking for backup drives…")
+        self._backups_group.add(self._backups_hint)
+        return self._backups_group
+
+    @staticmethod
+    def _scan_backups():
+        """[(dir, name, bytes, created, kernel, state)] - runs off the GUI thread."""
+        script = REPO / "lib" / "nightfall-backups.sh"
+        try:
+            out = subprocess.run([str(script), "list", "--tab"], text=True,
+                                 capture_output=True, env=askpass_env(), timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        rows = []
+        for line in out.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 6:
+                rows.append(parts[:6])
+        return rows
+
+    def _publish_backups(self, entries):
+        """Rebuild the group from a scan. On the GUI thread."""
+        for row in self._backup_rows:
+            self._backups_group.remove(row)
+        self._backup_rows = []
+
+        if not entries:
+            self._backups_hint.set_title("No backups found")
+            self._backups_hint.set_subtitle(
+                "Nightfall writes them to a folder called nocturne-backups on an "
+                "external drive. Plug that drive in - if the desktop does not mount "
+                "it by itself, open it in Files once.")
+            self._backups_hint.set_subtitle_lines(0)
+            self._backups_hint.set_visible(True)
+            return False
+        self._backups_hint.set_visible(False)
+
+        for directory, name, size, created, kernel, state in entries:
+            size = int(size) if size.isdigit() else 0
+            human = (f"{size / 1e9:.1f} GB" if size >= 1e9 else
+                     f"{size / 1e6:.0f} MB" if size >= 1e6 else f"{size / 1e3:.0f} kB")
+            if state == "incomplete":
+                # Nightfall's own list hides these, which is how they come to
+                # sit on a drive unnoticed - and they are usually the largest
+                # thing on it, so this is the one worth pointing at.
+                subtitle = (f"{human} · never finished, so nothing can be restored "
+                            f"from it · {directory}")
+            else:
+                detail = f" · {kernel}" if kernel and kernel != "unknown" else ""
+                subtitle = f"{human} · {created}{detail} · {directory}"
+            row = Adw.ActionRow(title=name, subtitle=subtitle)
+            row.set_subtitle_lines(0)
+            if state == "incomplete":
+                row.add_css_class("warning")
+            delete = Gtk.Button(label="Delete", valign=Gtk.Align.CENTER)
+            delete.add_css_class("destructive-action")
+            delete.connect("clicked",
+                           lambda _b, d=directory, n=name, h=human, st=state:
+                           self._confirm_delete_backup(d, n, h, st))
+            row.add_suffix(delete)
+            self._backups_group.add(row)
+            self._backup_rows.append(row)
+        return False
+
+    def _confirm_delete_backup(self, directory, name, human, state):
+        body = (f"{human} on {directory}.\n\nThis cannot be undone.")
+        if state == "incomplete":
+            body = (f"{human} on {directory}.\n\nThis backup never finished, so "
+                    f"nothing can be restored from it - deleting it only frees "
+                    f"the space. This cannot be undone.")
+        dialog = Adw.MessageDialog(
+            transient_for=self, modal=True,
+            heading=f"Delete {name}?", body=body)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("go", "Delete")
+        dialog.set_response_appearance("go", Adw.ResponseAppearance.DESTRUCTIVE)
+        # Cancel on Enter and on Escape: a stray keypress must never destroy
+        # the thing you keep for when everything else has gone wrong.
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r:
+                       self._delete_backup(directory, name) if r == "go" else None)
+        dialog.present()
+
+    def _delete_backup(self, directory, name):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        self._run_in_window(f"delete backup {name}",
+                            [cli, "--no-colour", "backups", "--delete", name,
+                             "--dir", directory, "--yes"],
+                            stream=False, refresh_after=True)
 
     def _push(self, page, title):
         toolbar = Adw.ToolbarView()
@@ -753,6 +864,10 @@ class Window(Adw.ApplicationWindow):
             while True:
                 for fix in self._all_fixes:
                     GLib.idle_add(self._publish, fix.id, fix.status())
+                # Backups last, and in this thread too: it reads a drive that
+                # may be spun down or slow, which is not something to do on the
+                # GUI thread for the sake of a subtitle.
+                GLib.idle_add(self._publish_backups, self._scan_backups())
                 if not self._resweep:
                     break
                 self._resweep = False

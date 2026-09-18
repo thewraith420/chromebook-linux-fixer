@@ -9,6 +9,7 @@
     chromebook-fixer revert <id>         undo
     chromebook-fixer boot-menu           what the boot menus do on their own
     chromebook-fixer logs <id>           a fix's own diagnostic log
+    chromebook-fixer backups             what Nightfall has backed up
 
 Nothing is applied without being asked for, and no fix runs unless its own
 detect script says the problem is actually present on this machine.
@@ -233,6 +234,78 @@ def _run_one(fix, action, c, assume_yes=False):
     return code
 
 
+def cmd_backups(args, c):
+    """
+    Show the backups Nightfall has taken, and delete one.
+
+    Taking and restoring belong to Nightfall, which does both with the real
+    root mounted read-only. What is useful from here is seeing what exists and
+    freeing space - on a tablet with no keyboard, otherwise a trip through the
+    boot manager.
+    """
+    script = Path(__file__).resolve().parent.parent / "lib" / "nightfall-backups.sh"
+    if not os.access(script, os.X_OK):
+        print(c(f"missing {script}", RED))
+        return 2
+
+    env = dict(os.environ)
+    cmd, askpass = sudo_command()
+    env["FIXER_SUDO"] = cmd
+    if askpass:
+        env["SUDO_ASKPASS"] = askpass
+
+    if not args.delete:
+        return subprocess.call([str(script), "list"], env=env)
+
+    # Resolve the name against what is actually plugged in, so nobody has to
+    # type a mount path. Two drives can hold the same name, so that is an
+    # error rather than a guess about which one to destroy.
+    found = subprocess.run([str(script), "list", "--tab"], env=env,
+                           capture_output=True, text=True)
+    matches = [line.split("\t") for line in found.stdout.splitlines()
+               if len(line.split("\t")) >= 6 and line.split("\t")[1] == args.delete]
+    if args.dir:
+        matches = [m for m in matches if m[0] == args.dir]
+    if not matches:
+        print(c(f"no backup called {args.delete!r} on any mounted drive", RED))
+        print("Run without --delete to see what is there.")
+        return 1
+    if len(matches) > 1:
+        print(c(f"{len(matches)} backups are called {args.delete!r}:", YELLOW))
+        for m in matches:
+            print(f"  {m[0]}")
+        print("Say which with --dir <path>.")
+        return 1
+
+    directory, name, size, created, kernel, state = matches[0][:6]
+    human = f"{int(size) / 1e9:.1f}GB" if int(size) >= 1e9 else f"{int(size) / 1e6:.0f}MB"
+    print(f"{c(name, BOLD)}  {human}")
+    print(f"  on      {directory}")
+    print(f"  taken   {created}")
+    if state == "incomplete":
+        print(c("  This one never finished, so it cannot be restored from.", DIM))
+    elif kernel and kernel != "unknown":
+        print(f"  kernel  {kernel}")
+    print()
+
+    if not args.yes:
+        # A backup is the thing you reach for when everything else went wrong,
+        # and deleting one cannot be undone, so the name has to be typed out -
+        # the same bar as applying a high-risk fix.
+        print(f"Deleting a backup cannot be undone.")
+        print(f"Type the backup name ({c(name, BOLD)}) to confirm, or anything else to cancel.")
+        try:
+            if input("  > ").strip() != name:
+                print("Cancelled; nothing was deleted.")
+                return 0
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled; nothing was deleted.")
+            return 0
+
+    sys.stdout.flush()
+    return subprocess.call([str(script), "delete", directory, name], env=env)
+
+
 def cmd_boot_menu(args, c):
     """
     Read or set how long each boot menu waits.
@@ -447,6 +520,15 @@ def main():
     pt.add_argument("-y", "--yes", action="store_true",
                     help="accept a timeout that can strand a keyboardless machine")
 
+    pb = sub.add_parser("backups",
+                        help="the backups Nightfall has taken, and delete one")
+    pb.add_argument("--delete", metavar="NAME",
+                    help="delete this backup (asks for the name to be typed)")
+    pb.add_argument("--dir", metavar="PATH",
+                    help="which drive, when two hold a backup of the same name")
+    pb.add_argument("-y", "--yes", action="store_true",
+                    help="skip the confirmation")
+
     pg = sub.add_parser("logs", help="show a fix's own diagnostic log, if it keeps one")
     pg.add_argument("fix", nargs="?", help="which fix (omit to list those that have logs)")
 
@@ -484,6 +566,8 @@ def main():
     # argparse records whichever name was typed, so the alias arrives as itself.
     if args.command in ("boot-menu", "boot-timeout"):
         return cmd_boot_menu(args, c)
+    if args.command == "backups":
+        return cmd_backups(args, c)
     if args.command == "logs":
         return cmd_logs(args, fixes, c)
     if args.command == "selftest":

@@ -13,6 +13,7 @@ on:
       - 'lib/**'
       - 'tests/**'
       - 'fixes/nightfall/**'
+      - 'bin/**'
       - '.github/workflows/tests.yml'
   pull_request:
   workflow_dispatch:
@@ -24,3 +25,5 @@ jobs:
       - uses: actions/checkout@v5
       - name: Nightfall boot-entry safety checks
         run: ./tests/test-nightfall-boot-safety.sh
+      - name: Nightfall backup housekeeping checks
+        run: ./tests/test-nightfall-backups.sh
