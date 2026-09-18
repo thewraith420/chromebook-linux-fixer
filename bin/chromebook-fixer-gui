@@ -104,7 +104,16 @@ class FixRow(Adw.ExpanderRow):
         return row
 
     def refresh(self):
-        state, detail = self.fix.status()
+        """Paint whatever the window's sweep has found for this fix so far."""
+        found = self.window.status_of(self.fix)
+        if found is None:
+            self.state_label.set_label("checking…")
+            self.apply_btn.set_sensitive(False)
+            self.revert_btn.set_sensitive(False)
+            return
+        self.show_status(*found)
+
+    def show_status(self, state, detail):
         text, style = STATE_TEXT[state]
         self.state_label.set_label(text)
         for s in ("success", "warning", "dim-label"):
@@ -136,6 +145,11 @@ class Window(Adw.ApplicationWindow):
         self.machine = Machine.detect()
         self.rows = []              # every FixRow, for refreshing
         self.category_rows = {}     # category key -> (row, fixes)
+        # fix id -> (state, detail), filled by the background sweep. Every page
+        # reads this; nothing on the GUI thread ever runs a detect script.
+        self._status = {}
+        self._sweeping = False
+        self._resweep = False
 
         self.nav = Adw.NavigationView()
         self.nav.add(self._build_root())
@@ -248,6 +262,12 @@ class Window(Adw.ApplicationWindow):
             nf.add(row)
         page.add(nf)
 
+        # One list for the sweep to walk: Nightfall's fixes and every other
+        # applicable one, in the order they are shown.
+        self._all_fixes = [r.fix for r in self.rows]
+        self._all_fixes += [f for fixes in self.fixes_by_category.values()
+                            for f in fixes]
+
         settings, handles = self._build_boot_settings()
         # Home is built once and never rebuilt, so these handles are the ones
         # _refresh_boot_menu should always write to.
@@ -332,6 +352,8 @@ class Window(Adw.ApplicationWindow):
     def _open_fixes(self):
         page, _groups, rows = self._build_fixes_page()
         # Only the page actually on screen becomes what refresh updates.
+        # Painting from the cache, not re-checking: this page used to run every
+        # fix's detect and verify as it opened, which froze the window.
         self.category_rows = rows
         self._refresh_categories()
         self._push(page, "Hardware fixes")
@@ -692,13 +714,56 @@ class Window(Adw.ApplicationWindow):
             return
         self._run_boot_menu(key, value)
 
-    def refresh_all(self):
-        self._refresh_boot_menu()
-        # Rows on any pushed page.
-        for row in self.rows:
-            row.refresh()
+    def status_of(self, fix):
+        """What the last sweep found for a fix, or None if it has not run yet."""
+        return self._status.get(fix.id)
 
+    def refresh_all(self):
+        """
+        Re-check everything, off the GUI thread.
+
+        Each status() runs the fix's verify and detect scripts - two
+        subprocesses, twenty-odd fixes - and this used to happen on the main
+        thread, so the window locked up while it ran. Opening Hardware fixes
+        made it worse by starting a second full sweep, once for the category
+        counts and again for the row that counts every fix behind it.
+
+        Now one background thread walks every fix and publishes each result as
+        it lands, so rows fill in progressively and the window stays live. A
+        sweep asked for while one is running is remembered, not stacked: an
+        apply finishing mid-sweep must still re-check, but two sweeps at once
+        would double the subprocesses for nothing.
+        """
+        self._refresh_boot_menu()          # file reads only, cheap enough here
+        if self._sweeping:
+            self._resweep = True
+            return False
+        self._sweeping = True
+
+        def worker():
+            while True:
+                for fix in self._all_fixes:
+                    GLib.idle_add(self._publish, fix.id, fix.status())
+                if not self._resweep:
+                    break
+                self._resweep = False
+            GLib.idle_add(self._sweep_done)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+        return False
+
+    def _publish(self, fix_id, result):
+        """One fix's result, on the GUI thread."""
+        self._status[fix_id] = result
+        for row in self.rows:
+            if row.fix.id == fix_id:
+                row.show_status(*result)
         self._refresh_categories()
+        return False
+
+    def _sweep_done(self):
+        self._sweeping = False
         return False
 
     def _refresh_categories(self):
@@ -711,19 +776,25 @@ class Window(Adw.ApplicationWindow):
         needs attention.
         """
         def tally(fixes):
-            needed = applied = 0
+            """(needed, applied, checked) from the cache - no subprocesses."""
+            needed = applied = checked = 0
             for fix in fixes:
-                state, _ = fix.status()
-                if state == "needed":
+                found = self._status.get(fix.id)
+                if found is None:
+                    continue
+                checked += 1
+                if found[0] == "needed":
                     needed += 1
-                elif state == "applied":
+                elif found[0] == "applied":
                     applied += 1
-            return needed, applied
+            return needed, applied, checked
 
         for _key, (row, fixes) in self.category_rows.items():
-            needed, applied = tally(fixes)
+            needed, applied, checked = tally(fixes)
             total = len(fixes)
-            if needed:
+            if checked < total and not needed:
+                row.set_subtitle(f"checking… ({checked} of {total})")
+            elif needed:
                 row.set_subtitle(f"{needed} of {total} need attention")
                 row.remove_css_class("dim-label")
             else:
@@ -731,8 +802,11 @@ class Window(Adw.ApplicationWindow):
                                  f"{applied} applied")
 
         every = [f for fixes in self.fixes_by_category.values() for f in fixes]
-        needed, applied = tally(every)
-        if needed:
+        needed, applied, checked = tally(every)
+        if checked < len(every) and not needed:
+            self._fixes_row.set_subtitle(f"checking… ({checked} of {len(every)})")
+            self._fixes_row.remove_css_class("warning")
+        elif needed:
             self._fixes_row.set_subtitle(
                 f"{needed} of {len(every)} need attention")
             self._fixes_row.add_css_class("warning")

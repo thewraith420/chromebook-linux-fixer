@@ -4,7 +4,14 @@ set -uo pipefail
 [ -d /sys/bus/pci/devices/0000:00:05.0 ] || exit 1     # no ImgU
 
 # Already replaced by a DKMS build of ours?
-if command -v dkms >/dev/null 2>&1 && \
+#
+# The directory test first because `dkms status` walks every registered module
+# and takes about four seconds on this machine - paid twice per status check,
+# once here and once in verify.sh, which was almost all of the GUI's detection
+# time. A module DKMS knows about always has this directory, so its absence is
+# a definitive no for the price of a stat.
+DKMS_ROOT="${DKMS_ROOT:-/var/lib/dkms}"
+if [ -d "$DKMS_ROOT/ipu3-imgu-fixed" ] && command -v dkms >/dev/null 2>&1 && \
    dkms status 2>/dev/null | grep -q "ipu3-imgu-fixed"; then
     exit 1
 fi
