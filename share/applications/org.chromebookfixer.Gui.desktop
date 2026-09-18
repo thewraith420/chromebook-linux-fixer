@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Chromebook Fixer
+Name=Nightfall — Chromebook Fixer
 GenericName=Hardware Enablement
 Comment=Detect and apply hardware fixes for Chromebooks running Linux
 Exec=chromebook-fixer-gui

@@ -119,17 +119,19 @@ class FixRow(Adw.ExpanderRow):
 
 class Window(Adw.ApplicationWindow):
     """
-    Two levels: a list of categories, then the fixes inside one.
+    Three levels: Nightfall, then the fix categories, then one category.
 
-    A single page of twenty expander rows is a wall of hardware jargon, and it
-    reads as intimidating rather than useful. People arrive because one thing is
-    broken, so the first screen is just "which part of the machine?", and each
-    category carries a count of what needs attention so nothing hides behind a
-    heading.
+    Home is Nightfall Boot Manager - installed or not, what it did on the last
+    boot, and every setting that changes it - because that is what this machine
+    runs on every boot. The hardware fixes sit one level down behind a single
+    row: twenty expander rows of hardware jargon read as intimidating rather
+    than useful, and they are where you go when something is broken, not
+    something you look at daily. Every row that stands for others carries a
+    count of what needs attention, so nothing hides behind a heading.
     """
 
     def __init__(self, app):
-        super().__init__(application=app, title="Chromebook Fixer",
+        super().__init__(application=app, title="Nightfall — Chromebook Fixer",
                          default_width=760, default_height=self._screen_cap_height())
         self.machine = Machine.detect()
         self.rows = []              # every FixRow, for refreshing
@@ -168,11 +170,10 @@ class Window(Adw.ApplicationWindow):
         something other than what is in it, so this measures instead.
 
         Every page, not only the root: the window's height is fixed once it
-        opens, and category pages are drawn in it. With the boot settings moved
-        off the root, the root became the short page - sizing to it alone would
-        make Booting and recovery scroll. Category pages are built here but
-        never shown; FixRows run no detection until refreshed, so this costs
-        widgets, not checks.
+        opens, and the pages below are drawn in it. Home carries Nightfall and
+        its settings and is usually the tallest, but a category page can beat
+        it. Pages are built here and never shown; FixRows run no detection
+        until refreshed, so this costs widgets, not checks.
 
         A page's height is the larger of its own natural height and the sum of
         its groups plus Adwaita's spacing. The page scrolls internally, so it
@@ -192,8 +193,10 @@ class Window(Adw.ApplicationWindow):
                            + 24 * len(groups) + 48)
 
             tallest = page_height(self._root_page, self._root_groups)
-            for key in self.category_rows:
-                page, groups, _rows, _handles = self._build_category_page(key, "")
+            page, groups, _rows = self._build_fixes_page()
+            tallest = max(tallest, page_height(page, groups))
+            for key in self.fixes_by_category:
+                page, groups, _rows = self._build_category_page(key, "")
                 tallest = max(tallest, page_height(page, groups))
             want = natural(self._root_header, 760) + tallest
             if want > 200:                     # a failed measure reads as ~0
@@ -202,10 +205,55 @@ class Window(Adw.ApplicationWindow):
             pass
         return cap
 
-    # -- level 1: the categories -------------------------------------------
+    # -- level 1: Nightfall -------------------------------------------------
+
+    # Nightfall's own fixes: installing it, and making it GRUB's default.
+    # They live on the home page, so they are left out of the category list
+    # rather than appearing in both places.
+    NIGHTFALL_FIXES = ("nightfall", "nightfall-default")
 
     def _build_root(self):
+        """
+        Home is Nightfall: what it is doing, and everything that changes it.
+
+        The hardware fixes are what this tool started as, but they are where
+        you go when something is broken, while Nightfall is used on every
+        boot. So they moved one level down, behind a single row that still
+        carries the count of anything needing attention - nothing can hide
+        behind it, because refresh_all counts every fix it stands for.
+        """
         page = Adw.PreferencesPage()
+
+        applicable = [f for f in load_fixes() if f.matches(self.machine)]
+        by_id = {f.id: f for f in applicable}
+        # Data, not widgets. Pages are built more than once - measuring builds
+        # them too - so what a category holds cannot live inside a page.
+        self.fixes_by_category = {}
+        for key in CATEGORIES:
+            fixes = [f for f in applicable
+                     if f.category == key and f.id not in self.NIGHTFALL_FIXES]
+            if fixes:
+                self.fixes_by_category[key] = fixes
+
+        nf = Adw.PreferencesGroup(
+            title="Nightfall Boot Manager",
+            description="The touch boot manager this machine starts in. "
+                        "Nothing is changed until you press Apply.")
+        for fid in self.NIGHTFALL_FIXES:
+            fix = by_id.get(fid)
+            if fix is None:
+                continue
+            row = FixRow(fix, self)
+            self.rows.append(row)          # built once, so refreshed with the rest
+            nf.add(row)
+        page.add(nf)
+
+        settings, handles = self._build_boot_settings()
+        # Home is built once and never rebuilt, so these handles are the ones
+        # _refresh_boot_menu should always write to.
+        self.boot = handles
+        for group in settings:
+            page.add(group)
 
         info = Adw.PreferencesGroup(title="This machine")
         info.add(self._row("Model", self.machine.describe()))
@@ -218,31 +266,19 @@ class Window(Adw.ApplicationWindow):
             info.add(r)
         page.add(info)
 
-        applicable = [f for f in load_fixes() if f.matches(self.machine)]
-        group = Adw.PreferencesGroup(
-            title="Fixes",
-            description="Pick the part of the machine you want to look at. "
-                        "Nothing is changed until you press Apply.")
+        # One row, no group title: the row says what it is, and a heading above
+        # a single row reads as an empty section.
+        fixes_group = Adw.PreferencesGroup()
+        self._fixes_row = Adw.ActionRow(
+            title="Hardware fixes", subtitle="checking…", activatable=True)
+        self._fixes_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        self._fixes_row.connect("activated", lambda _r: self._open_fixes())
+        fixes_group.add(self._fixes_row)
+        page.add(fixes_group)
 
-        for key, label in CATEGORIES.items():
-            fixes = [f for f in applicable if f.category == key]
-            if not fixes:
-                continue
-            # A subtitle from the start, not only once refresh_all fills it in.
-            # The window is sized by measuring this page before anything has
-            # been checked, and a row without a subtitle is shorter - eight of
-            # them measured bare would open the window too short once the
-            # counts arrive.
-            row = Adw.ActionRow(title=label, subtitle="checking…", activatable=True)
-            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-            row.connect("activated",
-                        lambda _r, k=key, l=label: self._open_category(k, l))
-            group.add(row)
-            self.category_rows[key] = (row, fixes)
-        page.add(group)
         # Kept so the window can be sized from what is actually on the page.
         self._root_page = page
-        self._root_groups = [info, group]
+        self._root_groups = [nf, *settings, info, fixes_group]
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -254,9 +290,53 @@ class Window(Adw.ApplicationWindow):
         toolbar.add_top_bar(header)
         toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
 
-        return Adw.NavigationPage(child=toolbar, title="Chromebook Fixer")
+        return Adw.NavigationPage(child=toolbar, title="Nightfall")
 
-    # -- level 2: one category ---------------------------------------------
+    def _push(self, page, title):
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(Adw.HeaderBar())     # back button is automatic
+        toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
+        self.nav.push(Adw.NavigationPage(child=toolbar, title=title))
+
+    # -- level 2: the categories -------------------------------------------
+
+    def _build_fixes_page(self):
+        """
+        The category list, built but not shown and not checked.
+
+        Built fresh every time, like a category page, so the copy measured for
+        sizing never becomes the copy that refresh writes to.
+        """
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(
+            title="Fixes",
+            description="Pick the part of the machine you want to look at. "
+                        "Nothing is changed until you press Apply.")
+        rows = {}
+        for key, label in CATEGORIES.items():
+            fixes = self.fixes_by_category.get(key)
+            if not fixes:
+                continue
+            # A subtitle from the start, not only once the counts arrive: the
+            # window is sized by measuring this page before anything has been
+            # checked, and a row without a subtitle is shorter.
+            row = Adw.ActionRow(title=label, subtitle="checking…", activatable=True)
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect("activated",
+                        lambda _r, k=key, l=label: self._open_category(k, l))
+            group.add(row)
+            rows[key] = (row, fixes)
+        page.add(group)
+        return page, [group], rows
+
+    def _open_fixes(self):
+        page, _groups, rows = self._build_fixes_page()
+        # Only the page actually on screen becomes what refresh updates.
+        self.category_rows = rows
+        self._refresh_categories()
+        self._push(page, "Hardware fixes")
+
+    # -- level 3: one category ---------------------------------------------
 
     def _build_category_page(self, key, label):
         """
@@ -267,43 +347,22 @@ class Window(Adw.ApplicationWindow):
         run no detection until refreshed, so building one is cheap and it is
         already the height it will be on screen.
         """
-        _row, fixes = self.category_rows[key]
         page = Adw.PreferencesPage()
-        extras, handles = self._category_extras(key)
-        # Titled only when settings follow, so a page that is only fixes looks
-        # exactly as it always has.
-        group = Adw.PreferencesGroup(title="Fixes" if extras else "")
+        group = Adw.PreferencesGroup()
         rows = []
-        for fix in fixes:
+        for fix in self.fixes_by_category.get(key, ()):
             row = FixRow(fix, self)
             rows.append(row)
             group.add(row)
         page.add(group)
-        for extra in extras:
-            page.add(extra)
-        return page, [group, *extras], rows, handles
-
-    def _category_extras(self, key):
-        """Settings that belong on a category's page, after its fixes."""
-        if key == "boot":
-            return self._build_boot_settings()
-        return [], None
+        return page, [group], rows
 
     def _open_category(self, key, label):
-        page, _groups, rows, handles = self._build_category_page(key, label)
+        page, _groups, rows = self._build_category_page(key, label)
         for row in rows:
             self.rows.append(row)
             row.refresh()
-        if handles is not None:
-            # Assigned only for the page actually opened - measuring builds
-            # pages too, and those must not become what refresh updates.
-            self.boot = handles
-            self._refresh_boot_menu()
-
-        toolbar = Adw.ToolbarView()
-        toolbar.add_top_bar(Adw.HeaderBar())     # back button is automatic
-        toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
-        self.nav.push(Adw.NavigationPage(child=toolbar, title=label))
+        self._push(page, label)
 
     # -- summaries ----------------------------------------------------------
 
@@ -639,10 +698,19 @@ class Window(Adw.ApplicationWindow):
         for row in self.rows:
             row.refresh()
 
-        # Category summaries. Counting here rather than on the row keeps the
-        # status check in one place, and means a category cannot look calm
-        # while something inside it needs attention.
-        for key, (row, fixes) in self.category_rows.items():
+        self._refresh_categories()
+        return False
+
+    def _refresh_categories(self):
+        """
+        Summaries for every row that stands for fixes underneath it: the
+        category rows when that page is open, and home's Hardware fixes row,
+        which counts every fix behind it whether or not its page was ever
+        opened. Counting here rather than on the rows keeps the status check in
+        one place, and means nothing can look calm while something inside it
+        needs attention.
+        """
+        def tally(fixes):
             needed = applied = 0
             for fix in fixes:
                 state, _ = fix.status()
@@ -650,6 +718,10 @@ class Window(Adw.ApplicationWindow):
                     needed += 1
                 elif state == "applied":
                     applied += 1
+            return needed, applied
+
+        for _key, (row, fixes) in self.category_rows.items():
+            needed, applied = tally(fixes)
             total = len(fixes)
             if needed:
                 row.set_subtitle(f"{needed} of {total} need attention")
@@ -657,7 +729,18 @@ class Window(Adw.ApplicationWindow):
             else:
                 row.set_subtitle(f"{total} fix{'es' if total != 1 else ''}, "
                                  f"{applied} applied")
-        return False
+
+        every = [f for fixes in self.fixes_by_category.values() for f in fixes]
+        needed, applied = tally(every)
+        if needed:
+            self._fixes_row.set_subtitle(
+                f"{needed} of {len(every)} need attention")
+            self._fixes_row.add_css_class("warning")
+        else:
+            self._fixes_row.set_subtitle(
+                f"camera, display, audio and the rest — nothing needed, "
+                f"{applied} applied")
+            self._fixes_row.remove_css_class("warning")
 
     @staticmethod
     def _row(title, subtitle):

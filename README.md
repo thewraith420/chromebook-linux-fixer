@@ -151,11 +151,19 @@ fix appears under:
 | `input` | Buttons and sensors |
 | `security` | Login and security |
 | `android` | Android (Waydroid) |
-| `boot` | Booting and recovery |
+| `boot` | (see below) |
 | `system` | System and performance |
 
 Anything unrecognised falls under **Other**, which is a prompt to add a
 category rather than a place to leave things.
+
+The GUI is one level deeper than that table suggests. Its home page is
+Nightfall Boot Manager - the `boot` fixes that install it and make it GRUB's
+default, plus its settings and GRUB's - because Nightfall is what this machine
+starts on every boot, while a hardware fix is where you go when something is
+broken. Everything above sits behind a single **Hardware fixes** row that
+carries the count of anything needing attention. The CLI is unaffected: it
+still groups every fix, `boot` included, under the headings above.
 
 `fix.yaml` declares metadata and, crucially, hazards:
 
