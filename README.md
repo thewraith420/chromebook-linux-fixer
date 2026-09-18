@@ -1,6 +1,13 @@
 # chromebook-fixer
 
-Hardware enablement fixes for Chromebooks running Linux.
+Nightfall Boot Manager, and hardware enablement fixes for Chromebooks running
+Linux.
+
+Two jobs, one tool. It installs and configures [Nightfall Boot
+Manager](https://github.com/thewraith420/nightfall-boot-manager) — the touch
+boot manager this machine starts on — and it carries the hardware fixes below.
+The GUI opens on Nightfall, with the fixes one level down; the CLI treats them
+as equals.
 
 Chromebooks are good hardware that Linux distributions support badly. The
 cameras, sensors, audio and power behaviour tend to depend on data that lives in

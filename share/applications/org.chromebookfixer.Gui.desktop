@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Nightfall — Chromebook Fixer
-GenericName=Hardware Enablement
-Comment=Detect and apply hardware fixes for Chromebooks running Linux
+GenericName=Boot Manager and Hardware Fixes
+Comment=Set up Nightfall Boot Manager and apply Chromebook hardware fixes
 Exec=chromebook-fixer-gui
 Icon=org.chromebookfixer.Gui
 Terminal=false
 Categories=Settings;HardwareSettings;GTK;
-Keywords=chromebook;hardware;camera;fix;kernel;
+Keywords=nightfall;boot;bootloader;grub;kernel;chromebook;hardware;camera;fix;
 StartupNotify=true

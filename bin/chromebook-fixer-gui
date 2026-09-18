@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""chromebook-fixer-gui — a window over the chromebook-fixer CLI.
+"""chromebook-fixer-gui — Nightfall Boot Manager, and a window over the CLI.
 
 Deliberately a front-end, not a reimplementation: it shells out to the same
 CLI, so detection, safety gating and the fix lifecycle have exactly one

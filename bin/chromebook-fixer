@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""chromebook-fixer — hardware enablement fixes for Chromebooks running Linux.
+"""chromebook-fixer — Nightfall Boot Manager, and hardware enablement fixes.
 
     chromebook-fixer status              what this machine needs
     chromebook-fixer list                every known fix
     chromebook-fixer apply <id>|--all    install
     chromebook-fixer verify <id>         check it is still working
     chromebook-fixer revert <id>         undo
+    chromebook-fixer boot-menu           what the boot menus do on their own
+    chromebook-fixer logs <id>           a fix's own diagnostic log
 
 Nothing is applied without being asked for, and no fix runs unless its own
 detect script says the problem is actually present on this machine.
@@ -414,7 +416,8 @@ def cmd_action(args, machine, fixes, c):
 def main():
     p = argparse.ArgumentParser(
         prog="chromebook-fixer",
-        description="Hardware enablement fixes for Chromebooks running Linux.")
+        description="Nightfall Boot Manager, and hardware enablement fixes "
+                    "for Chromebooks running Linux.")
     p.add_argument("--no-colour", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
 
