@@ -27,3 +27,5 @@ jobs:
         run: ./tests/test-nightfall-boot-safety.sh
       - name: Nightfall backup housekeeping checks
         run: ./tests/test-nightfall-backups.sh
+      - name: Kernel listing, removal guards and default
+        run: ./tests/test-kernels.sh

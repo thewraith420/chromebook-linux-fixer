@@ -278,6 +278,8 @@ class Window(Adw.ApplicationWindow):
         self.boot = handles
         nf_settings, grub_settings = settings[0], settings[1:]
         page.add(nf_settings)
+        kernels = self._build_kernels()
+        page.add(kernels)
         backups = self._build_backups()
         page.add(backups)
         for group in grub_settings:
@@ -306,7 +308,7 @@ class Window(Adw.ApplicationWindow):
 
         # Kept so the window can be sized from what is actually on the page.
         self._root_page = page
-        self._root_groups = [nf, nf_settings, backups, *grub_settings,
+        self._root_groups = [nf, nf_settings, kernels, backups, *grub_settings,
                              info, fixes_group]
 
         toolbar = Adw.ToolbarView()
@@ -320,6 +322,138 @@ class Window(Adw.ApplicationWindow):
         toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
 
         return Adw.NavigationPage(child=toolbar, title="Nightfall")
+
+    def _build_kernels(self):
+        """
+        Every kernel installed here, which one Nightfall boots first, and a way
+        to remove one.
+
+        Removing is the only thing in this window that can leave the machine
+        unable to boot, so the button is missing rather than disabled-looking
+        where it must not be used: the running kernel and the last one.
+        """
+        self._kernels_group = Adw.PreferencesGroup(
+            title="Kernels",
+            description="What is installed, and which one Nightfall boots "
+                        "first. Removing one frees its modules and initrd too.")
+        self._kernel_rows = []
+        self._kernels_hint = Adw.ActionRow(title="Looking for installed kernels…")
+        self._kernels_group.add(self._kernels_hint)
+        return self._kernels_group
+
+    @staticmethod
+    def _scan_kernels():
+        """[(release, bytes, package, flags, kind)] - runs off the GUI thread."""
+        script = REPO / "lib" / "kernels.sh"
+        try:
+            out = subprocess.run([str(script), "list", "--tab"], text=True,
+                                 capture_output=True, env=askpass_env(), timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        rows = []
+        for line in out.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 5:
+                rows.append(parts[:5])
+        return rows
+
+    def _publish_kernels(self, entries):
+        for row in self._kernel_rows:
+            self._kernels_group.remove(row)
+        self._kernel_rows = []
+
+        if not entries:
+            self._kernels_hint.set_title("No kernels found")
+            self._kernels_hint.set_subtitle(
+                "Nothing matching /boot/vmlinuz-* - unusual enough that it is "
+                "probably worth looking at from a terminal.")
+            self._kernels_hint.set_subtitle_lines(0)
+            self._kernels_hint.set_visible(True)
+            return False
+        self._kernels_hint.set_visible(False)
+
+        installed = [e for e in entries if e[4] == "kernel"]
+        for release, size, package, flags, kind in entries:
+            size = int(size) if size.isdigit() else 0
+            human = (f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB")
+            flag_set = set(f for f in flags.split(",") if f)
+            if kind == "modules":
+                subtitle = f"{human} · modules left behind, no kernel installed for them"
+            else:
+                who = package or "installed by hand"
+                notes = []
+                if "running" in flag_set:
+                    notes.append("running now")
+                if "default" in flag_set:
+                    notes.append("Nightfall boots this first")
+                if "no-initrd" in flag_set:
+                    notes.append("no initrd")
+                subtitle = f"{human} · {who}"
+                if notes:
+                    subtitle += " · " + " · ".join(notes)
+            row = Adw.ActionRow(title=release, subtitle=subtitle)
+            row.set_subtitle_lines(0)
+            if kind == "modules":
+                row.add_css_class("warning")
+
+            box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+            if kind == "kernel" and "default" not in flag_set:
+                pick = Gtk.Button(label="Boot first", valign=Gtk.Align.CENTER)
+                pick.set_tooltip_text("Make this the kernel Nightfall boots by default")
+                pick.connect("clicked", lambda _b, r=release: self._set_default_kernel(r))
+                box.append(pick)
+            # No Remove where it must not happen. A greyed-out button invites a
+            # click and explains nothing; the subtitle already says why.
+            removable = kind == "modules" or (
+                "running" not in flag_set and len(installed) > 1)
+            if removable:
+                rm = Gtk.Button(label="Remove", valign=Gtk.Align.CENTER)
+                rm.add_css_class("destructive-action")
+                rm.connect("clicked",
+                           lambda _b, r=release, h=human, k=kind, p=package:
+                           self._confirm_remove_kernel(r, h, k, p))
+                box.append(rm)
+            row.add_suffix(box)
+            self._kernels_group.add(row)
+            self._kernel_rows.append(row)
+        return False
+
+    def _set_default_kernel(self, release):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        self._run_in_window(f"default kernel {release}",
+                            [cli, "--no-colour", "kernels", "--default", release],
+                            stream=False, refresh_after=True)
+
+    def _confirm_remove_kernel(self, release, human, kind, package):
+        if kind == "modules":
+            body = (f"{human} of modules with no kernel installed for them. "
+                    f"Nothing boots these; removing them only frees the space.")
+        elif package:
+            body = (f"{human}, owned by {package}. It will be removed with apt, "
+                    f"along with its modules and headers packages.\n\n"
+                    f"You will not be able to boot it again without reinstalling it.")
+        else:
+            body = (f"{human}, installed by hand. Its kernel, initrd and modules "
+                    f"will be deleted and the GRUB menu rebuilt.\n\n"
+                    f"Nothing here can put it back: it would have to be built or "
+                    f"installed again.")
+        dialog = Adw.MessageDialog(
+            transient_for=self, modal=True,
+            heading=f"Remove {release}?", body=body)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("go", "Remove")
+        dialog.set_response_appearance("go", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r:
+                       self._remove_kernel(release) if r == "go" else None)
+        dialog.present()
+
+    def _remove_kernel(self, release):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        self._run_in_window(f"remove kernel {release}",
+                            [cli, "--no-colour", "kernels", "--remove", release, "--yes"],
+                            stream=True, refresh_after=True)
 
     def _build_backups(self):
         """
@@ -864,9 +998,11 @@ class Window(Adw.ApplicationWindow):
             while True:
                 for fix in self._all_fixes:
                     GLib.idle_add(self._publish, fix.id, fix.status())
-                # Backups last, and in this thread too: it reads a drive that
-                # may be spun down or slow, which is not something to do on the
-                # GUI thread for the sake of a subtitle.
+                # Kernels and backups in this thread too: both read the
+                # disk - du over module trees, a drive that may be spun down -
+                # which is not something to do on the GUI thread for the sake
+                # of a subtitle.
+                GLib.idle_add(self._publish_kernels, self._scan_kernels())
                 GLib.idle_add(self._publish_backups, self._scan_backups())
                 if not self._resweep:
                     break

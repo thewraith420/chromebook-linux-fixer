@@ -10,6 +10,7 @@
     chromebook-fixer boot-menu           what the boot menus do on their own
     chromebook-fixer logs <id>           a fix's own diagnostic log
     chromebook-fixer backups             what Nightfall has backed up
+    chromebook-fixer kernels             installed kernels, and the default
 
 Nothing is applied without being asked for, and no fix runs unless its own
 detect script says the problem is actually present on this machine.
@@ -306,6 +307,83 @@ def cmd_backups(args, c):
     return subprocess.call([str(script), "delete", directory, name], env=env)
 
 
+def cmd_kernels(args, c):
+    """
+    The kernels installed here: see them, remove one, choose Nightfall's default.
+
+    Removal is the only thing in this tool that can leave a machine unable to
+    boot, so the script it calls refuses the running kernel and the last one,
+    and this asks for the release to be typed before any of it runs.
+    """
+    script = Path(__file__).resolve().parent.parent / "lib" / "kernels.sh"
+    if not os.access(script, os.X_OK):
+        print(c(f"missing {script}", RED))
+        return 2
+
+    env = dict(os.environ)
+    cmd, askpass = sudo_command()
+    env["FIXER_SUDO"] = cmd
+    if askpass:
+        env["SUDO_ASKPASS"] = askpass
+
+    if args.clear_default:
+        return subprocess.call([str(script), "default", "--clear"], env=env)
+    if args.default:
+        return subprocess.call([str(script), "default", args.default], env=env)
+    if not args.remove:
+        rc = subprocess.call([str(script), "list"], env=env)
+        print()
+        sys.stdout.flush()
+        subprocess.call([str(script), "default", "--show"], env=env)
+        return rc
+
+    # What is about to go, from the same listing the GUI reads.
+    found = subprocess.run([str(script), "list", "--tab"], env=env,
+                           capture_output=True, text=True)
+    match = None
+    for line in found.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 5 and parts[0] == args.remove:
+            match = parts
+            break
+    if match is None:
+        print(c(f"no kernel or leftover modules called {args.remove!r}", RED))
+        print("Run without --remove to see what is installed.")
+        return 1
+
+    release, size, pkg, flags, kind = match[:5]
+    human = f"{int(size) / 1e9:.1f}GB" if int(size) >= 1e9 else f"{int(size) / 1e6:.0f}MB"
+    print(f"{c(release, BOLD)}  {human}")
+    if kind == "modules":
+        print("  leftover modules; no kernel is installed for them")
+    else:
+        print(f"  {pkg or 'installed by hand, not owned by any package'}")
+        if flags:
+            print(f"  {flags}")
+    print()
+
+    # Refuse before asking anything. kernels.sh refuses these too - it has to,
+    # since it is runnable on its own - but making someone type a release only
+    # to be told no is a bad way to find out.
+    if "running" in flags:
+        print(c("This is the running kernel. Boot another one first.", RED))
+        return 1
+
+    if not args.yes:
+        print("Removing a kernel cannot be undone without reinstalling it.")
+        print(f"Type the release ({c(release, BOLD)}) to confirm, or anything else to cancel.")
+        try:
+            if input("  > ").strip() != release:
+                print("Cancelled; nothing was removed.")
+                return 0
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled; nothing was removed.")
+            return 0
+
+    sys.stdout.flush()
+    return subprocess.call([str(script), "remove", release], env=env)
+
+
 def cmd_boot_menu(args, c):
     """
     Read or set how long each boot menu waits.
@@ -520,6 +598,17 @@ def main():
     pt.add_argument("-y", "--yes", action="store_true",
                     help="accept a timeout that can strand a keyboardless machine")
 
+    pk = sub.add_parser("kernels",
+                        help="installed kernels, and which one Nightfall boots")
+    pk.add_argument("--remove", metavar="RELEASE",
+                    help="remove this kernel (asks for the release to be typed)")
+    pk.add_argument("--default", metavar="RELEASE",
+                    help="the kernel Nightfall boots first")
+    pk.add_argument("--clear-default", action="store_true",
+                    help="forget it, and boot whatever GRUB lists first")
+    pk.add_argument("-y", "--yes", action="store_true",
+                    help="skip the confirmation")
+
     pb = sub.add_parser("backups",
                         help="the backups Nightfall has taken, and delete one")
     pb.add_argument("--delete", metavar="NAME",
@@ -568,6 +657,8 @@ def main():
         return cmd_boot_menu(args, c)
     if args.command == "backups":
         return cmd_backups(args, c)
+    if args.command == "kernels":
+        return cmd_kernels(args, c)
     if args.command == "logs":
         return cmd_logs(args, fixes, c)
     if args.command == "selftest":
