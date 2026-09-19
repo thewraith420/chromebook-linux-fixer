@@ -115,6 +115,31 @@ fix's own detection says the problem is actually present on this machine.
 High-risk fixes require you to type the fix id to confirm. A `y/N` prompt is too
 easy to answer by reflex for something that can lock the machine.
 
+### Nightfall
+
+```
+chromebook-fixer boot-menu                              # every boot setting, current values
+chromebook-fixer boot-menu --nightfall 20                # Nightfall's menu timeout, seconds
+chromebook-fixer boot-menu --grub 5                       # GRUB's own menu timeout
+chromebook-fixer boot-menu --rotate 90 --autorotate off   # starting rotation, follow the accelerometer or not
+chromebook-fixer boot-menu --splash off --splash-secs 0.5 # boot screens on/off, minimum time each stays up
+
+chromebook-fixer kernels                                 # installed kernels, and Nightfall's default
+chromebook-fixer kernels --install <tarball> [--set-default]  # install a BobZKernel portable-installer tarball
+chromebook-fixer kernels --default <release>              # make Nightfall boot this one first
+chromebook-fixer kernels --remove <release>                # asks for the release to be typed first
+
+chromebook-fixer backups                                  # backups Nightfall has taken, on any mounted drive
+chromebook-fixer backups --delete <name>                   # asks for the name to be typed first
+```
+
+Nightfall itself takes and restores backups, and installs the kernel it boots
+into, from its own environment with the real root mounted read-only — neither
+of those is safe to do from the running system, so the fixer does not attempt
+either. What it adds is the part that is otherwise a reboot into the touch UI
+just to check: seeing what is installed, freeing space, and changing settings
+that live as small files on `/boot`.
+
 ---
 
 ## How a fix works
@@ -146,7 +171,7 @@ marker, your parameter — not the symptom being gone. Where the symptom can als
 vanish on its own, say so with exit 3.
 
 Fixes are grouped by category in both the CLI and the GUI. A flat list of
-twenty entries reads as a wall of hardware jargon, and people open this tool
+twenty-one entries reads as a wall of hardware jargon, and people open this tool
 because one specific thing is broken - so `category` decides which heading a
 fix appears under:
 
@@ -164,13 +189,18 @@ fix appears under:
 Anything unrecognised falls under **Other**, which is a prompt to add a
 category rather than a place to leave things.
 
-The GUI is one level deeper than that table suggests. Its home page is
-Nightfall Boot Manager - the `boot` fixes that install it and make it GRUB's
-default, plus its settings and GRUB's - because Nightfall is what this machine
-starts on every boot, while a hardware fix is where you go when something is
-broken. Everything above sits behind a single **Hardware fixes** row that
-carries the count of anything needing attention. The CLI is unaffected: it
-still groups every fix, `boot` included, under the headings above.
+The GUI is one level deeper than that table suggests, and organised around
+what you use daily rather than what is merely installed. Home opens with
+Machine Specs, a single **Hardware fixes** row (carrying the count of
+anything needing attention, whichever category it is in) and GRUB — the
+fallback bootloader underneath everything. Below that, one heading size
+larger since everything from there down belongs to it, is Nightfall Boot
+Manager: **Install Nightfall** (the two `boot` fixes — installing it,
+making it GRUB's default), its settings, installed **Kernels** (view, remove,
+install one from a tarball, choose Nightfall's default), and its **Backups**
+(view, delete — taking and restoring stay in Nightfall itself; see
+[Nightfall](#nightfall) above). The CLI is unaffected: it still groups every
+fix, `boot` included, under the headings above.
 
 `fix.yaml` declares metadata and, crucially, hazards:
 
@@ -248,7 +278,7 @@ kernel/                  kernel patches (shipped, not applied)
 
 ## What is covered
 
-20 fixes at present, grouped by the part of the machine they concern:
+21 fixes at present, grouped by the part of the machine they concern:
 
 **Camera** — `camera-orientation`, `ipu3-camera`, `ipu3-imgu-grableak`, `ipu3-imgu-iommu`, `ipu3-vcm-focus`
 
@@ -260,7 +290,7 @@ kernel/                  kernel patches (shipped, not applied)
 
 **Login and security** — `cros-fp-fingerprint`
 
-**Booting and recovery** — `nightfall`
+**Booting and recovery** — `nightfall`, `nightfall-default`
 
 **Android (Waydroid)** — `waydroid-lxc-hook`, `waydroid-netfilter`, `waydroid-usb`
 
