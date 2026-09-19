@@ -288,7 +288,7 @@ class Window(Adw.ApplicationWindow):
         # one visual cue that everything below this point, unlike everything
         # above it, is Nightfall's.
         nf = Adw.PreferencesGroup(
-            title="Nightfall Boot Manager",
+            title="Install Nightfall",
             description="The touch boot manager this machine starts in. "
                         "Nothing is changed until you press Apply.")
         nf.add_css_class("nightfall-heading")
@@ -1305,9 +1305,11 @@ class Application(Adw.Application):
     @staticmethod
     def _install_css():
         """
-        One bump: the Nightfall Boot Manager heading a size larger than every
-        other group's, since everything below it on the home page belongs to
-        it. Adwaita's own PreferencesGroup title carries style classes
+        One bump: the "nightfall-heading" group's title a size larger than
+        every other group's - "Install Nightfall" today, whatever it is
+        renamed to next - since everything below it on the home page belongs
+        to Nightfall. Adwaita's own PreferencesGroup title carries style
+        classes
         "heading h4" (its smallest heading scale) with no per-instance size
         property to reach from Python, so this targets that class by name,
         scoped to groups marked "nightfall-heading" - never anything else's
