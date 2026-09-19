@@ -467,7 +467,7 @@ class Window(Adw.ApplicationWindow):
 
             box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
             if kind == "kernel" and "default" not in flag_set:
-                pick = Gtk.Button(label="Boot first", valign=Gtk.Align.CENTER)
+                pick = Gtk.Button(label="Set Default", valign=Gtk.Align.CENTER)
                 pick.set_tooltip_text("Make this the kernel Nightfall boots by default")
                 pick.connect("clicked", lambda _b, r=release: self._set_default_kernel(r))
                 box.append(pick)
