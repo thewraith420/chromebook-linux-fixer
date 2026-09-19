@@ -128,15 +128,19 @@ class FixRow(Adw.ExpanderRow):
 
 class Window(Adw.ApplicationWindow):
     """
-    Three levels: Nightfall, then the fix categories, then one category.
+    Three levels: home, then the fix categories, then one category.
 
-    Home is Nightfall Boot Manager - installed or not, what it did on the last
-    boot, and every setting that changes it - because that is what this machine
-    runs on every boot. The hardware fixes sit one level down behind a single
-    row: twenty expander rows of hardware jargon read as intimidating rather
-    than useful, and they are where you go when something is broken, not
-    something you look at daily. Every row that stands for others carries a
-    count of what needs attention, so nothing hides behind a heading.
+    Home opens with the machine itself - specs, then hardware fixes behind a
+    single row, then GRUB, the fallback bootloader underneath everything - and
+    only then Nightfall Boot Manager: installed or not, what it did on the
+    last boot, and every setting that changes it. Nightfall runs one heading
+    size larger than the groups around it, since everything below that point
+    belongs to it. The hardware fixes are one level down rather than listed
+    here directly: twenty expander rows of hardware jargon read as
+    intimidating rather than useful, and they are where you go when something
+    is broken, not something you look at daily. Every row that stands for
+    others carries a count of what needs attention, so nothing hides behind a
+    heading.
     """
 
     def __init__(self, app):
@@ -234,11 +238,17 @@ class Window(Adw.ApplicationWindow):
         """
         Home is Nightfall: what it is doing, and everything that changes it.
 
-        The hardware fixes are what this tool started as, but they are where
-        you go when something is broken, while Nightfall is used on every
-        boot. So they moved one level down, behind a single row that still
-        carries the count of anything needing attention - nothing can hide
-        behind it, because refresh_all counts every fix it stands for.
+        Top to bottom: Machine Specs and Hardware fixes (what this tool
+        started as - where you go when something is broken), GRUB (the
+        fallback bootloader underneath everything, hardware-level rather than
+        Nightfall's own), then Nightfall Boot Manager and everything under
+        it - settings, kernels, backups - which is used on every boot, so its
+        heading runs a size larger than the groups below it: everything from
+        there down belongs to it.
+
+        The hardware fixes are behind a single row that still carries the
+        count of anything needing attention - nothing can hide behind it,
+        because refresh_all counts every fix it stands for.
         """
         page = Adw.PreferencesPage()
 
@@ -253,10 +263,34 @@ class Window(Adw.ApplicationWindow):
             if fixes:
                 self.fixes_by_category[key] = fixes
 
+        info = Adw.PreferencesGroup(title="Machine Specs")
+        info.add(self._row("Model", self.machine.describe()))
+        info.add(self._row("Kernel", self.machine.kernel))
+        if not self.machine.is_chromebook:
+            r = self._row("Warning",
+                          "This does not look like a Chromebook. Fixes are "
+                          "matched on hardware and most will not apply.")
+            r.add_css_class("warning")
+            info.add(r)
+
+        # One row, no group title: the row says what it is, and a heading above
+        # a single row reads as an empty section.
+        fixes_group = Adw.PreferencesGroup()
+        self._fixes_row = Adw.ActionRow(
+            title="Hardware fixes", subtitle="checking…", activatable=True)
+        self._fixes_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        self._fixes_row.connect("activated", lambda _r: self._open_fixes())
+        fixes_group.add(self._fixes_row)
+
+        # "nightfall-heading" bumps its title from Adwaita's .h4 scale to .h3
+        # (see the CSS provider installed in Application.do_activate) - the
+        # one visual cue that everything below this point, unlike everything
+        # above it, is Nightfall's.
         nf = Adw.PreferencesGroup(
             title="Nightfall Boot Manager",
             description="The touch boot manager this machine starts in. "
                         "Nothing is changed until you press Apply.")
+        nf.add_css_class("nightfall-heading")
         for fid in self.NIGHTFALL_FIXES:
             fix = by_id.get(fid)
             if fix is None:
@@ -264,7 +298,6 @@ class Window(Adw.ApplicationWindow):
             row = FixRow(fix, self)
             self.rows.append(row)          # built once, so refreshed with the rest
             nf.add(row)
-        page.add(nf)
 
         # One list for the sweep to walk: Nightfall's fixes and every other
         # applicable one, in the order they are shown.
@@ -277,39 +310,17 @@ class Window(Adw.ApplicationWindow):
         # _refresh_boot_menu should always write to.
         self.boot = handles
         nf_settings, grub_settings = settings[0], settings[1:]
-        page.add(nf_settings)
         kernels = self._build_kernels()
-        page.add(kernels)
         backups = self._build_backups()
-        page.add(backups)
-        for group in grub_settings:
+
+        for group in (info, fixes_group, *grub_settings, nf, nf_settings,
+                     kernels, backups):
             page.add(group)
-
-        info = Adw.PreferencesGroup(title="This machine")
-        info.add(self._row("Model", self.machine.describe()))
-        info.add(self._row("Kernel", self.machine.kernel))
-        if not self.machine.is_chromebook:
-            r = self._row("Warning",
-                          "This does not look like a Chromebook. Fixes are "
-                          "matched on hardware and most will not apply.")
-            r.add_css_class("warning")
-            info.add(r)
-        page.add(info)
-
-        # One row, no group title: the row says what it is, and a heading above
-        # a single row reads as an empty section.
-        fixes_group = Adw.PreferencesGroup()
-        self._fixes_row = Adw.ActionRow(
-            title="Hardware fixes", subtitle="checking…", activatable=True)
-        self._fixes_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-        self._fixes_row.connect("activated", lambda _r: self._open_fixes())
-        fixes_group.add(self._fixes_row)
-        page.add(fixes_group)
 
         # Kept so the window can be sized from what is actually on the page.
         self._root_page = page
-        self._root_groups = [nf, nf_settings, kernels, backups, *grub_settings,
-                             info, fixes_group]
+        self._root_groups = [info, fixes_group, *grub_settings, nf,
+                             nf_settings, kernels, backups]
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -814,12 +825,10 @@ class Window(Adw.ApplicationWindow):
 
     def _build_boot_settings(self):
         """
-        Booting and recovery's settings: Nightfall's, then GRUB's.
-
-        They live on this page rather than the root one because everything
-        about booting belongs in one place, in the order it is used: install
-        Nightfall, make it the default, tune it, and GRUB beneath as the
-        fallback. The root page is a list of places to go, not a panel.
+        Nightfall's settings, and GRUB's - built together since one function
+        already had both, but placed apart on the page: GRUB sits with the
+        hardware-level groups near the top, Nightfall's with everything else
+        that belongs to it. _build_root decides where each half lands.
 
         Nightfall's group shows one line instead of its rows until Nightfall is
         installed - on a machine without it they configure nothing. GRUB's
@@ -1284,9 +1293,34 @@ class Window(Adw.ApplicationWindow):
 class Application(Adw.Application):
     def __init__(self):
         super().__init__(application_id="org.chromebookfixer.Gui")
+        self._styled = False
 
     def do_activate(self):
+        if not self._styled:
+            self._install_css()
+            self._styled = True
         Window(self).present()
+
+    @staticmethod
+    def _install_css():
+        """
+        One bump: the Nightfall Boot Manager heading a size larger than every
+        other group's, since everything below it on the home page belongs to
+        it. Adwaita's own PreferencesGroup title carries style classes
+        "heading h4" (its smallest heading scale) with no per-instance size
+        property to reach from Python, so this targets that class by name,
+        scoped to groups marked "nightfall-heading" - never anything else's
+        title, including a category page's, or a future group that happens to
+        also use .h4.
+        """
+        css = b"""
+            .nightfall-heading .heading.h4 { font-size: 1.25em; }
+        """
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 
 if __name__ == "__main__":
