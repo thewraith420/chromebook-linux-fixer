@@ -144,7 +144,8 @@ class Window(Adw.ApplicationWindow):
     """
 
     def __init__(self, app):
-        super().__init__(application=app, title="Nightfall — Chromebook Fixer",
+        super().__init__(application=app,
+                         title="Nightfall Boot Manager — Chromebook Fixer",
                          default_width=760, default_height=self._screen_cap_height())
         self.machine = Machine.detect()
         self.rows = []              # every FixRow, for refreshing
@@ -332,7 +333,7 @@ class Window(Adw.ApplicationWindow):
         toolbar.add_top_bar(header)
         toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
 
-        return Adw.NavigationPage(child=toolbar, title="Nightfall")
+        return Adw.NavigationPage(child=toolbar, title="Nightfall Boot Manager")
 
     def _build_kernels(self):
         """

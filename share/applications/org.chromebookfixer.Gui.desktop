@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Nightfall — Chromebook Fixer
+Name=Nightfall Boot Manager — Chromebook Fixer
 GenericName=Boot Manager and Hardware Fixes
 Comment=Set up Nightfall Boot Manager and apply Chromebook hardware fixes
 Exec=chromebook-fixer-gui
