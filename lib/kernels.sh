@@ -23,14 +23,13 @@
 # since the fixer runs ON the live system and IS the real root. So this talks
 # to depmod/update-initramfs/update-grub directly, no chroot, mirroring what
 # both install-kernel.sh (picker) and BobZKernel's own portable install.sh
-# (interactive, multi-distro) do at the point they touch disk. Accepts either
-# tarball shape - Nightfall's bare boot/+lib/, or BobZKernel's portable
-# installer with VERSION/install.sh/uninstall.sh alongside - since this never
-# runs the bundled install.sh; only boot/vmlinuz-<release>,
-# boot/{System.map,config}-<release> and lib/modules/<release>/ are ever
-# extracted, by exact member name from the tar listing, never a blanket
-# "./boot ./lib". A downloaded tarball is not a trusted input the way an
-# initramfs-embedded one implicitly is.
+# (interactive, multi-distro) do at the point they touch disk, but this never
+# runs the bundled install.sh - see below. The tarball is BobZKernel's own
+# portable installer format: boot/+lib/modules/ alongside VERSION/install.sh/
+# uninstall.sh. Only boot/vmlinuz-<release>, boot/{System.map,config}-<release>
+# and lib/modules/<release>/ are ever extracted, by exact member name read
+# from the tar listing, never a blanket "./boot ./lib". A downloaded tarball
+# is not a trusted input the way an initramfs-embedded one implicitly is.
 #
 # GUARDS, in the order they matter - this is the one thing here that can leave
 # a machine that will not boot:
