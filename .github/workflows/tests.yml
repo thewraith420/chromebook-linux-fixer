@@ -29,3 +29,5 @@ jobs:
         run: ./tests/test-nightfall-backups.sh
       - name: Kernel listing, removal guards and default
         run: ./tests/test-kernels.sh
+      - name: Nightfall install detection (touchscreen, marker, GRUB)
+        run: ./tests/test-nightfall-detect.sh
