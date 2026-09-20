@@ -2,6 +2,15 @@
 set -euo pipefail
 SUDO="${FIXER_SUDO:-sudo}"
 
+# One shared cleanup trap for every temp dir this script can create (the
+# kernel-fetch's download, and the kernel-reuse copy further down) - `trap
+# ... EXIT` REPLACES a previous handler rather than adding to it, so two
+# independent `trap 'rm -rf "$X"' EXIT` calls would silently leak whichever
+# one set theirs first. Both variables start empty; rm -rf on an empty
+# argument is a no-op, not an error, so this is safe before either is ever set.
+TMPDIR_FETCH=""; TMPDIR_PICKER=""
+trap 'rm -rf "$TMPDIR_FETCH" "$TMPDIR_PICKER"' EXIT
+
 # Where the picker's own source lives. It is a separate project, deliberately:
 # this fix installs it, it does not vendor it.
 EXPLICIT_REPO="${FIXER_NIGHTFALL_REPO:-${FIXER_PICKER_REPO:-}}"
@@ -24,10 +33,29 @@ find_installer() {
 }
 INSTALLER=$(find_installer || true)
 
+# Refuse before touching anything - before the kernel is located or copied,
+# before minutes of building - to reinstall from a boot whose command line
+# would give Nightfall's entry the wrong panel settings. See
+# lib/nightfall-cmdline-check.sh. It used to run after the kernel had already
+# been copied out to a temp directory; harmless, but a refusal should mean
+# nothing happened, and the Nightfall installer's first version of this same
+# guard ran after copying images into /boot. Skipped for a build check, which
+# installs nothing and so cannot write a bad entry. The cheapest, most
+# side-effect-free check in this whole script, so it runs before either of
+# the two auto-provisioning steps below - neither should touch the network or
+# $HOME on a run that was always going to refuse here anyway.
+if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+    "$FIXER_REPO/lib/nightfall-cmdline-check.sh" || { echo "Nothing was changed."; exit 1; }
+fi
+
 # Auto-clone when truly nothing was found - not when $FIXER_NIGHTFALL_REPO was
 # given explicitly and turned out wrong, which stays a loud error rather than
 # silently cloning somewhere the user did not ask for. Not under a build
 # check either: CI should never reach for the network or for sudo on its own.
+# Ahead of the kernel check below on purpose, reversing where this sat before:
+# a fetched picker kernel is staged inside this checkout
+# ($REPO/picker-kernel/vmlinuz, an existing search candidate), so kernel
+# auto-fetch needs a resolved $REPO to write into.
 NF_CLONE_URL="${NF_CLONE_URL:-https://github.com/thewraith420/nightfall-boot-manager}"
 NF_CLONE_DIR="$HOME/nightfall-boot-manager"
 if [ -z "$INSTALLER" ] && [ -z "$EXPLICIT_REPO" ] && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
@@ -75,36 +103,95 @@ if [ -z "$INSTALLER" ]; then
 fi
 echo "picker source: $REPO"
 
-# Refuse before touching anything - before the kernel is located or copied,
-# before minutes of building - to reinstall from a boot whose command line
-# would give Nightfall's entry the wrong panel settings. See
-# lib/nightfall-cmdline-check.sh. It used to run after the kernel had already
-# been copied out to a temp directory; harmless, but a refusal should mean
-# nothing happened, and the Nightfall installer's first version of this same
-# guard ran after copying images into /boot. Skipped for a build check, which
-# installs nothing and so cannot write a bad entry.
-if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
-    "$FIXER_REPO/lib/nightfall-cmdline-check.sh" || { echo "Nothing was changed."; exit 1; }
-fi
-
-# The picker kernel is the one thing this cannot produce. Building a kernel is
-# not something this tool does, and a 1.3GHz tablet is not where you would do
-# it - so it must already exist somewhere.
-# Under a build check the kernel is irrelevant: it is copied at install time,
-# never compiled, and the two things that CAN rot - the LVGL UI and the
-# initramfs - build without it. Demanding it here would make the check
-# impossible on any machine that has not already installed Nightfall.
+# The picker kernel used to be the one thing this could not produce - building
+# one is not something this tool does, and a 1.3GHz tablet is not where you
+# would do it. Fetching an ALREADY-BUILT one is a different matter, the same
+# category as cloning the checkout above: BobZKernel publishes picker-kernel
+# builds as GitHub releases (tag pattern *-picker), so when nothing is found
+# locally and the user did not point at a kernel explicitly, the latest one is
+# downloaded and staged at $REPO/picker-kernel/vmlinuz - an existing search
+# candidate below, so finding it afterward needs no separate code path.
+# Under a build check the kernel is irrelevant regardless: it is copied at
+# install time, never compiled, and the two things that CAN rot - the LVGL UI
+# and the initramfs - build without it. Demanding or fetching it here would
+# make the check impossible offline, or on a machine that has never installed
+# Nightfall.
 KERNEL="${FIXER_NIGHTFALL_KERNEL:-${FIXER_PICKER_KERNEL:-}}"
+EXPLICIT_KERNEL="$KERNEL"
 if [ -z "$KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
     for c in /boot/nightfall/vmlinuz /boot/picker/vmlinuz "$REPO"/picker-kernel/vmlinuz* \
              "$HOME"/buildstuff/BobZKernel/installer-*picker*/boot/vmlinuz-*; do
         [ -r "$c" ] && { KERNEL="$c"; break; }
     done
 fi
+
+NF_KERNEL_API="${NF_KERNEL_API:-https://api.github.com/repos/thewraith420/BobZKernel/releases}"
+NF_KERNEL_STAGE="$REPO/picker-kernel/vmlinuz"
+if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+    echo "no picker kernel found locally; checking BobZKernel's releases for one"
+    if ! command -v curl >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "  installing curl"
+            $SUDO apt-get install -y curl || echo "  could not install curl - skipping the fetch"
+        fi
+    fi
+    if command -v curl >/dev/null 2>&1; then
+        # Releases come back newest first, so the first asset whose name says
+        # "picker" is the latest picker-kernel build - never the regular
+        # daily-driver kernel releases sitting alongside it in the same feed,
+        # which is a different BobZKernel branch for a different purpose.
+        # || true: under `set -o pipefail`, curl failing (no network, GitHub
+        # down, rate-limited) would otherwise make this whole assignment
+        # exit non-zero and - under `set -e` - kill the script right here,
+        # never reaching the graceful "no picker-kernel release found" /
+        # manual-instructions path below. A failed lookup is meant to be a
+        # normal, handled outcome, not a crash.
+        ASSET_URL=$(curl -fsSL "$NF_KERNEL_API" 2>/dev/null \
+            | grep -oE '"browser_download_url": *"[^"]*picker[^"]*"' \
+            | head -1 | sed -E 's/.*"(https[^"]*)"/\1/' || true)
+        if [ -n "$ASSET_URL" ]; then
+            echo "  found $ASSET_URL"
+            TMPDIR_FETCH=$(mktemp -d)   # cleaned by the shared trap at the top
+            TARBALL="$TMPDIR_FETCH/picker.tar.gz"
+            if curl -fSL "$ASSET_URL" -o "$TARBALL" 2>&1 | tail -3; then
+                # Exactly one member, by name, straight to its final path -
+                # never a blanket extraction. tar -O streams it to stdout and
+                # creates nothing else on disk itself, which is a narrower
+                # risk surface than letting tar write wherever a member name
+                # says to (see lib/kernels.sh install, which extracts a whole
+                # tree and needs the traversal guard this does not).
+                # || true: an empty match (grep exits 1) under pipefail would
+                # otherwise abort the whole script right here instead of
+                # reaching the graceful "no boot/vmlinuz-*" message below -
+                # same class of bug as $ASSET_URL above.
+                MEMBER=$(tar tzf "$TARBALL" 2>/dev/null | grep -E '(^|/)boot/vmlinuz-' | head -1 || true)
+                if [ -n "$MEMBER" ]; then
+                    mkdir -p "$(dirname "$NF_KERNEL_STAGE")"
+                    if tar xzf "$TARBALL" -O "$MEMBER" > "$NF_KERNEL_STAGE" 2>/dev/null \
+                       && [ -s "$NF_KERNEL_STAGE" ]; then
+                        KERNEL="$NF_KERNEL_STAGE"
+                        echo "  staged at $KERNEL"
+                    else
+                        echo "  extraction failed; not using a partial file"
+                        rm -f "$NF_KERNEL_STAGE"
+                    fi
+                else
+                    echo "  no boot/vmlinuz-* inside that release asset"
+                fi
+            else
+                echo "  download failed - no network, or GitHub is unreachable from here"
+            fi
+        else
+            echo "  no picker-kernel release found"
+        fi
+    fi
+fi
+
 if { [ -z "$KERNEL" ] || [ ! -r "$KERNEL" ]; } && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
     echo "No picker kernel image found."
     echo "It is built from BobZKernel's picker-kernel branch, on a real machine,"
-    echo "not here. Point this at the result:"
+    echo "not here, and published as a GitHub release when it is - this looked"
+    echo "for one there and found none usable. Point this at one directly:"
     echo "  FIXER_NIGHTFALL_KERNEL=/path/to/vmlinuz chromebook-fixer apply nightfall"
     echo "Nothing was changed."
     exit 1
@@ -119,11 +206,9 @@ fi
 # place, and install-picker.sh copies its argument to exactly that path - cp
 # refuses to copy a file onto itself and the whole install aborts partway.
 # Hand it a copy instead, so the common "rebuild the initramfs" case works.
-TMPDIR_PICKER=""
 KREAL=$([ -n "$KERNEL" ] && readlink -f "$KERNEL" || echo "")
 if [ "$KREAL" = /boot/nightfall/vmlinuz ] || [ "$KREAL" = /boot/picker/vmlinuz ]; then
-    TMPDIR_PICKER=$(mktemp -d)
-    trap 'rm -rf "$TMPDIR_PICKER"' EXIT
+    TMPDIR_PICKER=$(mktemp -d)   # cleaned by the shared trap at the top
     cp "$KERNEL" "$TMPDIR_PICKER/vmlinuz"
     KERNEL="$TMPDIR_PICKER/vmlinuz"
     echo "  (already installed; reusing it via $KERNEL)"
@@ -245,8 +330,12 @@ echo
 # Read the title back out rather than hardcoding it: the installer chooses it,
 # and it changed with the rename ('Boot Picker (touch)' -> 'Nightfall (touch)').
 # Telling someone to look for an entry that is not in their menu is a bad last
-# line for a fix that just rewrote how the machine boots.
+# line for a fix that just rewrote how the machine boots. || true: this is
+# cosmetic, so a sed that matches nothing (a menuentry format the installer
+# stops using, say) should fall through to an empty title, not kill the
+# script's last, purely informational line - same class of bug as $ASSET_URL
+# and $MEMBER above.
 TITLE=$(sed -n "s/^[[:space:]]*menuentry[[:space:]]*['\"]\([^'\"]*\).*/\1/p" \
-        /boot/grub/custom.cfg 2>/dev/null | tail -1)
+        /boot/grub/custom.cfg 2>/dev/null | tail -1 || true)
 echo "Reboot and choose ${TITLE:+\'$TITLE\' }from the GRUB menu."
 echo "It is not the default: every normal entry still boots exactly as before."

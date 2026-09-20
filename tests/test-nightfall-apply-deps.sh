@@ -57,6 +57,26 @@ BUSYBOX_REAL="$(type -P busybox)"
 [ -n "$BUSYBOX_REAL" ] && ln -s "$BUSYBOX_REAL" "$MINBIN/busybox"
 ln -s "$TRUE_REAL" "$MINBIN/e2fsck"
 
+# --- a fake picker-kernel release tarball, for the kernel-fetch stub curl to
+# "download" - the real shape: boot/vmlinuz-<release> inside a gzipped tar. --
+PICKER_TARBALL="$T/BobZKernel-9.9.9-picker-installer.tar.gz"
+PKSRC="$T/picker_src"; mkdir -p "$PKSRC/boot"
+echo "fake picker vmlinuz bytes" > "$PKSRC/boot/vmlinuz-9.9.9-BobZKernel-picker"
+( cd "$PKSRC" && tar czf "$PICKER_TARBALL" ./boot )
+
+# A canned GitHub releases API response: one picker release ahead of one
+# pixel-slate release, newest first - the same shape the real feed has, so
+# the "first picker match wins, the regular kernel release does not" grep in
+# apply.sh is exercised against something realistic, not a synthetic single
+# entry.
+CURL_FAKE_API_JSON="$T/releases.json"
+cat > "$CURL_FAKE_API_JSON" <<JSON
+[
+  {"tag_name": "v9.9.9-picker", "assets": [{"browser_download_url": "https://example.invalid/BobZKernel-9.9.9-picker-installer.tar.gz"}]},
+  {"tag_name": "v9.9.9-pixel-slate", "assets": [{"browser_download_url": "https://example.invalid/BobZKernel-9.9.9-pixel-slate-installer.tar.gz"}]}
+]
+JSON
+
 # --- a fake upstream repo for `git clone` to actually pull from -----------
 UP="$T/upstream"; mkdir -p "$UP/boot-integration" "$UP/ui" "$UP/initramfs"
 cat > "$UP/boot-integration/install-nightfall.sh" <<'EOF'
@@ -95,6 +115,7 @@ echo "apt-get \$*" >> "\$APT_LOG"
 for a in "\$@"; do
     case "\$a" in
         git)            ln -sf "$GIT_REAL"  "\$MINBIN/git" ;;
+        curl)           ln -sf "\$BIN/curl" "\$MINBIN/curl" ;;
         kexec-tools)    ln -sf "$TRUE_REAL" "\$MINBIN/kexec" ;;
         busybox-static) ln -sf "$TRUE_REAL" "\$MINBIN/busybox" ;;
         fakeroot)       ln -sf "$TRUE_REAL" "\$MINBIN/fakeroot" ;;
@@ -107,6 +128,29 @@ STUB
     chmod +x "$BIN/apt-get"
 }
 write_working_apt_stub
+
+# curl stub: never touches the real network. Two modes, matching exactly how
+# apply.sh calls it - `curl -fsSL <url>` (no -o) lists releases, `curl -fSL
+# <url> -o <file>` downloads one. Which release feed and which tarball it
+# serves are controlled by $CURL_FAKE_API_JSON/$CURL_FAKE_TARBALL; CURL_FAIL_*
+# simulate each call failing (no network, GitHub unreachable) independently.
+cat > "$BIN/curl" <<STUB
+#!/bin/bash
+out=""; url=""
+args=("\$@")
+for i in "\${!args[@]}"; do
+    if [ "\${args[\$i]}" = "-o" ]; then out="\${args[\$((i+1))]}"; fi
+done
+for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
+if [ -n "\$out" ]; then
+    [ -n "\${CURL_FAIL_DOWNLOAD:-}" ] && exit 22
+    cp "\${CURL_FAKE_TARBALL:-/nonexistent}" "\$out" 2>/dev/null || exit 22
+else
+    [ -n "\${CURL_FAIL_API:-}" ] && exit 22
+    cat "\${CURL_FAKE_API_JSON:-/nonexistent}" 2>/dev/null || exit 22
+fi
+STUB
+chmod +x "$BIN/curl"
 
 FAKE_KERNEL="$T/fake-vmlinuz"; echo x > "$FAKE_KERNEL"
 
@@ -231,18 +275,103 @@ lacks "  and does not fabricate an apt command"       "sudo apt install" run_pkg
 write_working_apt_stub
 ln -sf "$TRUE_REAL" "$MINBIN/kexec"   # restore
 
-# ---- ordering: a doomed run (no kernel) must never touch apt-get ----------
+# ---- ordering: a doomed run (no kernel, and none fetchable) must never
+# touch the build/boot package install --------------------------------------
 reset_state; with_drm
 rm -f "$MINBIN/kexec"
 NK_HOME="$T/home_nokernel"; mkdir -p "$NK_HOME"; cp -r "$UP" "$NK_HOME/nightfall-boot-manager"
 env HOME="$NK_HOME" PATH="$BIN:$MINBIN" FIXER_SUDO=env FIXER_REPO="$REPO" \
     NF_CLONE_URL="$UP" PROC_CMDLINE=/dev/null LOG="$T/log" APT_LOG="$T/apt.log" \
-    MINBIN="$MINBIN" NF_DRM_HEADER="$T/drm/drm.h" \
+    MINBIN="$MINBIN" NF_DRM_HEADER="$T/drm/drm.h" CURL_FAIL_API=1 \
     CUSTOM_CFG="$NK_HOME/custom.cfg" CFG_TARGET="$NK_HOME/custom.cfg" \
-    "$A" >/dev/null 2>&1     # no FIXER_NIGHTFALL_KERNEL, and none findable
-lacks "no kernel found -> refuses before ever installing anything" "apt-get install" \
-      cat "$T/apt.log"
+    "$A" >/dev/null 2>&1     # no FIXER_NIGHTFALL_KERNEL, none findable, fetch fails
+lacks "no kernel (fetch failed too) -> refuses before build/boot packages" \
+      "kexec-tools" cat "$T/apt.log"
 ln -sf "$TRUE_REAL" "$MINBIN/kexec"
+
+# ---- kernel auto-fetch: BobZKernel publishes prebuilt picker-kernel releases
+# on GitHub - this is a fetch of an already-built artifact, the same category
+# as the checkout auto-clone above, not the kernel BUILD apply.sh still
+# refuses to attempt. Needs a checkout already in place (the fetched vmlinuz
+# is staged inside it) and no FIXER_NIGHTFALL_KERNEL, so driven directly
+# rather than through run(), which always sets one. ------------------------
+KF_HOME="$T/home_kfetch"
+run_kfetch() {
+    env HOME="$KF_HOME" PATH="$BIN:$MINBIN" FIXER_SUDO=env FIXER_REPO="$REPO" \
+        NF_CLONE_URL="$UP" PROC_CMDLINE=/dev/null LOG="$T/log" APT_LOG="$T/apt.log" \
+        MINBIN="$MINBIN" NF_DRM_HEADER="$T/drm/drm.h" \
+        CURL_FAKE_API_JSON="$CURL_FAKE_API_JSON" CURL_FAKE_TARBALL="$PICKER_TARBALL" \
+        CUSTOM_CFG="$KF_HOME/custom.cfg" CFG_TARGET="$KF_HOME/custom.cfg" "$@" "$A"
+}
+
+reset_state; with_drm
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+# One fetch, checked several ways - not several separate run_kfetch calls: a
+# second call would find the just-staged kernel and reuse it rather than
+# fetch again, so it would tell us nothing new about the fetch itself.
+KF_OUT=$(run_kfetch 2>&1)
+says  "fetches the release when no kernel is found locally" "found https://example.invalid" \
+      echo "$KF_OUT"
+says  "  names the picker asset, not the pixel-slate one alongside it" \
+      "9.9.9-picker-installer.tar.gz" echo "$KF_OUT"
+holds "  staged where the kernel search already looks" \
+      -s "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
+says  "  and the install ran using it"                "install-nightfall.sh ran" cat "$T/log"
+
+reset_state; with_drm
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+says  "an explicit FIXER_NIGHTFALL_KERNEL skips the fetch entirely" "picker kernel: $FAKE_KERNEL" \
+      run_kfetch FIXER_NIGHTFALL_KERNEL="$FAKE_KERNEL"
+lacks "  curl's API was never even asked"             "found https://" \
+      run_kfetch FIXER_NIGHTFALL_KERNEL="$FAKE_KERNEL"
+
+reset_state; with_drm
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+says  "API unreachable: falls through to the normal 'not found' message" \
+      "No picker kernel image found" run_kfetch CURL_FAIL_API=1
+holds "  nothing was staged"                          ! -e "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
+
+reset_state; with_drm
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+says  "download failing: same graceful fallback, not a crash" \
+      "No picker kernel image found" run_kfetch CURL_FAIL_DOWNLOAD=1
+holds "  nothing was staged"                          ! -e "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
+
+reset_state; with_drm
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+NO_MATCH_JSON="$T/releases-no-picker.json"
+echo '[{"tag_name": "v9.9.9-pixel-slate", "assets": [{"browser_download_url": "https://example.invalid/BobZKernel-9.9.9-pixel-slate-installer.tar.gz"}]}]' \
+    > "$NO_MATCH_JSON"
+says  "a feed with no picker release at all: same graceful fallback" \
+      "no picker-kernel release found" run_kfetch CURL_FAKE_API_JSON="$NO_MATCH_JSON"
+
+reset_state; with_drm
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+BAD_TARBALL="$T/not-a-kernel.tar.gz"
+( cd "$T" && mkdir -p emptydir && tar czf "$BAD_TARBALL" emptydir )
+says  "a release asset with no boot/vmlinuz-* inside: refuses, does not stage garbage" \
+      "no boot/vmlinuz" run_kfetch CURL_FAKE_TARBALL="$BAD_TARBALL"
+holds "  nothing was staged"                          ! -e "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
+
+reset_state; with_drm
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+run_kfetch >/dev/null 2>&1
+KF2_HOME="$T/home_kfetch2"; rm -rf "$KF2_HOME"; mkdir -p "$KF2_HOME"
+cp -r "$KF_HOME/nightfall-boot-manager" "$KF2_HOME/nightfall-boot-manager"
+lacks "a kernel already staged from an earlier fetch is reused, not re-fetched" \
+      "no picker kernel found locally" \
+      env HOME="$KF2_HOME" PATH="$BIN:$MINBIN" FIXER_SUDO=env FIXER_REPO="$REPO" \
+          NF_CLONE_URL="$UP" PROC_CMDLINE=/dev/null LOG="$T/log" APT_LOG="$T/apt.log" \
+          MINBIN="$MINBIN" NF_DRM_HEADER="$T/drm/drm.h" CURL_FAIL_API=1 \
+          CUSTOM_CFG="$KF2_HOME/custom.cfg" CFG_TARGET="$KF2_HOME/custom.cfg" "$A"
+
+reset_state; with_drm
+BO_KF_HOME="$T/home_bo_kf"; mkdir -p "$BO_KF_HOME"; cp -r "$UP" "$BO_KF_HOME/nightfall-boot-manager"
+says  "build-only never fetches a kernel - CI should not reach for the network" \
+      "not needed for a build check" \
+      env FIXER_BUILD_ONLY=1 HOME="$BO_KF_HOME" PATH="$BIN:$MINBIN" FIXER_SUDO=env \
+          FIXER_REPO="$REPO" LOG="$T/log" APT_LOG="$T/apt.log" \
+          CUSTOM_CFG="$BO_KF_HOME/custom.cfg" CFG_TARGET="$BO_KF_HOME/custom.cfg" "$A"
 
 # ---- build-only: still just reports, never calls apt-get -------------------
 # Needs a checkout already in place - a build-only run with none would refuse
