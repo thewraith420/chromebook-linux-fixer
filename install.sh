@@ -36,6 +36,31 @@ command -v update-desktop-database >/dev/null && \
 command -v gtk-update-icon-cache >/dev/null && \
     gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
+# The CLI needs nothing but Python's standard library and works right after
+# the symlinks above. The GUI needs GTK4 and libadwaita's GObject-Introspection
+# bindings, which several distros (Mint confirmed, 2026-09-20) do not install
+# by default even when python3-gi itself is present - PyGObject only exposes
+# the typelibs actually on disk, so `import gi` succeeds and the specific
+# `from gi.repository import Gtk, Adw` fails, with no earlier warning. Checked
+# here rather than left to be discovered as a bare traceback on first launch.
+if ! python3 -c "
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Gtk, Adw
+" >/dev/null 2>&1; then
+    echo
+    echo "Note: the GUI (chromebook-fixer-gui) needs GTK4 and libadwaita's"
+    echo "GObject-Introspection bindings, and this system is missing at least"
+    echo "one. The CLI above does not need them and works either way."
+    if command -v apt-get >/dev/null; then
+        echo "  sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1"
+    else
+        echo "  install your distro's packages for: python3-gi (PyGObject),"
+        echo "  GTK4 and libadwaita GObject-Introspection typelibs"
+    fi
+fi
+
 echo
 case ":$PATH:" in
     *":$BIN:"*)
