@@ -4,7 +4,8 @@ SUDO="${FIXER_SUDO:-sudo}"
 
 # Where the picker's own source lives. It is a separate project, deliberately:
 # this fix installs it, it does not vendor it.
-REPO="${FIXER_NIGHTFALL_REPO:-${FIXER_PICKER_REPO:-}}"
+EXPLICIT_REPO="${FIXER_NIGHTFALL_REPO:-${FIXER_PICKER_REPO:-}}"
+REPO="$EXPLICIT_REPO"
 if [ -z "$REPO" ]; then
     # Renamed project; the old checkout name still exists on machines that
     # cloned before the rename, and GitHub redirects the old URL either way.
@@ -13,18 +14,56 @@ if [ -z "$REPO" ]; then
         [ -d "$c" ] && { REPO="$c"; break; }
     done
 fi
-INSTALLER=
-for cand in install-nightfall.sh install-picker.sh; do
-    [ -n "$REPO" ] && [ -x "$REPO/boot-integration/$cand" ] && {
-        INSTALLER="$REPO/boot-integration/$cand"; break; }
-done
+find_installer() {
+    local cand
+    for cand in install-nightfall.sh install-picker.sh; do
+        [ -n "$REPO" ] && [ -x "$REPO/boot-integration/$cand" ] && {
+            echo "$REPO/boot-integration/$cand"; return 0; }
+    done
+    return 1
+}
+INSTALLER=$(find_installer || true)
+
+# Auto-clone when truly nothing was found - not when $FIXER_NIGHTFALL_REPO was
+# given explicitly and turned out wrong, which stays a loud error rather than
+# silently cloning somewhere the user did not ask for. Not under a build
+# check either: CI should never reach for the network or for sudo on its own.
+NF_CLONE_URL="${NF_CLONE_URL:-https://github.com/thewraith420/nightfall-boot-manager}"
+NF_CLONE_DIR="$HOME/nightfall-boot-manager"
+if [ -z "$INSTALLER" ] && [ -z "$EXPLICIT_REPO" ] && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+    echo "nightfall-boot-manager checkout not found; cloning it (this fix installs"
+    echo "it, it does not vendor it, so this only has to happen once)."
+    if ! command -v git >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "  installing git"
+            $SUDO apt-get install -y git || {
+                echo "could not install git - install it yourself, then re-run:"
+                echo "  sudo apt install git"; echo "Nothing was changed."; exit 1; }
+        else
+            echo "git is not installed and this is not an apt system - install it"
+            echo "yourself, then re-run. Nothing was changed."
+            exit 1
+        fi
+    fi
+    if git clone "$NF_CLONE_URL" "$NF_CLONE_DIR"; then
+        REPO="$NF_CLONE_DIR"
+        INSTALLER=$(find_installer || true)
+        [ -n "$INSTALLER" ] || {
+            echo "cloned $NF_CLONE_DIR but boot-integration/install-nightfall.sh is not"
+            echo "in it - wrong branch, or the layout changed. Nothing was changed."
+            exit 1; }
+    else
+        echo "clone failed - no network, or $NF_CLONE_URL is unreachable from here."
+    fi
+fi
+
 if [ -z "$INSTALLER" ]; then
     echo "nightfall-boot-manager checkout not found (formerly nocturne-boot-picker)."
     echo "Looked in: \$FIXER_NIGHTFALL_REPO, ~/nightfall-boot-manager,"
     echo "           ~/buildstuff/nightfall-boot-manager, and the pre-rename"
     echo "           ~/nocturne-boot-picker paths"
     echo
-    echo "  git clone https://github.com/thewraith420/nightfall-boot-manager"
+    echo "  git clone $NF_CLONE_URL"
     echo "  chromebook-fixer apply nightfall"
     echo
     echo "Or point at an existing one:"
@@ -88,6 +127,43 @@ if [ "$KREAL" = /boot/nightfall/vmlinuz ] || [ "$KREAL" = /boot/picker/vmlinuz ]
     cp "$KERNEL" "$TMPDIR_PICKER/vmlinuz"
     KERNEL="$TMPDIR_PICKER/vmlinuz"
     echo "  (already installed; reusing it via $KERNEL)"
+fi
+
+# Everything the UI build and the initramfs build need, checked together and
+# installed in one shot - not two, one for each - so a machine missing both
+# only prompts for a fingerprint once. Positioned after the kernel-image check
+# above: a run about to refuse for lack of a kernel should never ask for
+# privilege escalation on its way there. Never under a build check, same
+# reasoning as the auto-clone: CI should not reach for sudo on its own, and
+# missing tools there already get their own "cannot check" message below.
+if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+    MISSING_PKGS=""
+    command -v git      >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS git"
+    command -v gcc      >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS build-essential"
+    command -v make     >/dev/null 2>&1 || case " $MISSING_PKGS " in
+        *" build-essential "*) ;; *) MISSING_PKGS="$MISSING_PKGS build-essential" ;; esac
+    [ -f "${NF_DRM_HEADER:-/usr/include/libdrm/drm.h}" ] || MISSING_PKGS="$MISSING_PKGS libdrm-dev"
+    command -v kexec    >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS kexec-tools"
+    command -v busybox  >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS busybox-static"
+    command -v cpio     >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS cpio"
+    command -v gzip     >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS gzip"
+    command -v fakeroot >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS fakeroot"
+    command -v e2fsck   >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS e2fsprogs"
+    if [ -n "$MISSING_PKGS" ]; then
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "installing missing build/boot dependencies:$MISSING_PKGS"
+            $SUDO apt-get install -y $MISSING_PKGS || {
+                echo "could not install:$MISSING_PKGS"
+                echo "  sudo apt install$MISSING_PKGS"
+                echo "Nothing was changed."
+                exit 1
+            }
+        else
+            echo "missing, and this is not an apt system - install yourself:$MISSING_PKGS"
+            echo "Nothing was changed."
+            exit 1
+        fi
+    fi
 fi
 
 # The UI binary and the initramfs are built HERE on purpose. The initramfs
