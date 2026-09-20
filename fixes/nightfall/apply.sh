@@ -153,7 +153,22 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
             echo "  found $ASSET_URL"
             TMPDIR_FETCH=$(mktemp -d)   # cleaned by the shared trap at the top
             TARBALL="$TMPDIR_FETCH/picker.tar.gz"
-            if curl -fSL "$ASSET_URL" -o "$TARBALL" 2>&1 | tail -3; then
+            # A real gap: the release is ~80MB, and curl's own progress meter
+            # redraws one line with \r rather than emitting the newlines a
+            # line-reading log window needs, so `curl | tail -3` used to sit
+            # in total silence for the whole download, then dump three lines
+            # at the very end - indistinguishable from a hang, confirmed on
+            # real hardware. curl runs in the background instead; the size on
+            # disk is echoed - a real newline every few seconds - every
+            # NF_FETCH_POLL_SECS, then `wait` picks up curl's real exit status.
+            curl -fSL "$ASSET_URL" -o "$TARBALL" >"$TMPDIR_FETCH/curl.log" 2>&1 &
+            CURL_PID=$!
+            while kill -0 "$CURL_PID" 2>/dev/null; do
+                sleep "${NF_FETCH_POLL_SECS:-3}"
+                SO_FAR=$(stat -c %s "$TARBALL" 2>/dev/null || echo 0)
+                [ "$SO_FAR" -gt 0 ] && echo "  ...downloading, $(( SO_FAR / 1048576 ))MB so far"
+            done
+            if wait "$CURL_PID"; then
                 # Exactly one member, by name, straight to its final path -
                 # never a blanket extraction. tar -O streams it to stdout and
                 # creates nothing else on disk itself, which is a narrower
@@ -180,6 +195,7 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
                 fi
             else
                 echo "  download failed - no network, or GitHub is unreachable from here"
+                tail -3 "$TMPDIR_FETCH/curl.log" 2>/dev/null | sed 's/^/  /'
             fi
         else
             echo "  no picker-kernel release found"

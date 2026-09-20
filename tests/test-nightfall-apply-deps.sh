@@ -37,7 +37,7 @@ holds()  { local name="$1"; shift
 BIN="$T/bin"; MINBIN="$T/minbin"; mkdir -p "$BIN" "$MINBIN"
 for t in bash sh cat grep sed sort awk head tail cp mkdir rm mv readlink mktemp \
          dirname basename env tr cut wc du chmod touch git make gcc tar gzip \
-         ln stat; do
+         ln stat sleep kill; do
     p=$(type -P "$t" 2>/dev/null); [ -n "$p" ] && ln -s "$p" "$MINBIN/$t"
 done
 # Resolved NOW, against the real PATH, and handed to the apt-get stub as fixed
@@ -297,9 +297,12 @@ ln -sf "$TRUE_REAL" "$MINBIN/kexec"
 # rather than through run(), which always sets one. ------------------------
 KF_HOME="$T/home_kfetch"
 run_kfetch() {
+    # NF_FETCH_POLL_SECS near-zero: the stub curl finishes almost instantly,
+    # but apply.sh's progress loop always sleeps at least one interval before
+    # noticing - real seconds otherwise, times every test that fetches.
     env HOME="$KF_HOME" PATH="$BIN:$MINBIN" FIXER_SUDO=env FIXER_REPO="$REPO" \
         NF_CLONE_URL="$UP" PROC_CMDLINE=/dev/null LOG="$T/log" APT_LOG="$T/apt.log" \
-        MINBIN="$MINBIN" NF_DRM_HEADER="$T/drm/drm.h" \
+        MINBIN="$MINBIN" NF_DRM_HEADER="$T/drm/drm.h" NF_FETCH_POLL_SECS=0.05 \
         CURL_FAKE_API_JSON="$CURL_FAKE_API_JSON" CURL_FAKE_TARBALL="$PICKER_TARBALL" \
         CUSTOM_CFG="$KF_HOME/custom.cfg" CFG_TARGET="$KF_HOME/custom.cfg" "$@" "$A"
 }
@@ -317,6 +320,49 @@ says  "  names the picker asset, not the pixel-slate one alongside it" \
 holds "  staged where the kernel search already looks" \
       -s "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
 says  "  and the install ran using it"                "install-nightfall.sh ran" cat "$T/log"
+
+# A real regression this once was: `curl | tail -3` buffered the ENTIRE
+# ~80MB download and showed nothing until it finished, indistinguishable from
+# a hang - confirmed on real hardware, Bob watching an apply that had in fact
+# succeeded. curl now runs in the background with its progress polled
+# separately, so this checks that mechanism directly: a stub slow enough for
+# the poll loop to catch mid-download, not just that the fetch still works.
+reset_state; with_drm
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+cat > "$BIN/curl" <<STUB
+#!/bin/bash
+out=""; args=("\$@")
+for i in "\${!args[@]}"; do [ "\${args[\$i]}" = "-o" ] && out="\${args[\$((i+1))]}"; done
+if [ -n "\$out" ]; then
+    head -c 1000000 "\$CURL_FAKE_TARBALL" > "\$out"
+    sleep 0.3
+    cat "\$CURL_FAKE_TARBALL" > "\$out"
+else
+    cat "\${CURL_FAKE_API_JSON:-/nonexistent}"
+fi
+STUB
+chmod +x "$BIN/curl"
+SLOW_OUT=$(env HOME="$KF_HOME" PATH="$BIN:$MINBIN" FIXER_SUDO=env FIXER_REPO="$REPO" \
+    NF_CLONE_URL="$UP" PROC_CMDLINE=/dev/null LOG="$T/log" APT_LOG="$T/apt.log" \
+    MINBIN="$MINBIN" NF_DRM_HEADER="$T/drm/drm.h" NF_FETCH_POLL_SECS=0.1 \
+    CURL_FAKE_API_JSON="$CURL_FAKE_API_JSON" CURL_FAKE_TARBALL="$PICKER_TARBALL" \
+    CUSTOM_CFG="$KF_HOME/custom.cfg" CFG_TARGET="$KF_HOME/custom.cfg" "$A" 2>&1)
+says  "a slow download shows periodic progress, not silence" "downloading," echo "$SLOW_OUT"
+says  "  with a byte count that grows"                       "MB so far" echo "$SLOW_OUT"
+cat > "$BIN/curl" <<STUB
+#!/bin/bash
+out=""; args=("\$@")
+for i in "\${!args[@]}"; do [ "\${args[\$i]}" = "-o" ] && out="\${args[\$((i+1))]}"; done
+for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
+if [ -n "\$out" ]; then
+    [ -n "\${CURL_FAIL_DOWNLOAD:-}" ] && exit 22
+    cp "\${CURL_FAKE_TARBALL:-/nonexistent}" "\$out" 2>/dev/null || exit 22
+else
+    [ -n "\${CURL_FAIL_API:-}" ] && exit 22
+    cat "\${CURL_FAKE_API_JSON:-/nonexistent}" 2>/dev/null || exit 22
+fi
+STUB
+chmod +x "$BIN/curl"   # restore the normal fast stub for the rest of the suite
 
 reset_state; with_drm
 rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
