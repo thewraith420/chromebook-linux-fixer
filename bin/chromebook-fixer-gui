@@ -20,7 +20,32 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "lib"))
-from registry import CATEGORIES, Machine, load_fixes  # noqa: E402
+from registry import CATEGORIES, Machine, load_fixes, STATE_DIR  # noqa: E402
+
+# The same one-time acknowledgement bin/chromebook-fixer's first_run_gate()
+# requires before any apply/revert, and the same stamp file - so accepting it
+# here means the CLI subprocess this window is about to run finds it already
+# there and never touches its own stdin prompt for it. That prompt is the
+# problem: this window streams a subprocess's stdout into a read-only text
+# view with no way to type a reply back to it, so on a machine that has never
+# accepted it in a terminal, every apply/revert used to hang at that prompt
+# and then exit 1 once the pipe closed, with nothing on screen explaining why.
+DISCLAIMER_STAMP = STATE_DIR / "disclaimer-accepted"
+DISCLAIMER_TEXT = """\
+This tool makes low-level changes to your system: replacing system \
+libraries, editing udev rules, patching vendor scripts, or altering kernel \
+behaviour, depending on the fix.
+
+Some fixes touch hardware that is poorly supported on Linux. A bad \
+interaction can hard lock the machine, requiring a forced power-off, which \
+can corrupt a filesystem or lose unsaved work.
+
+This is developed and tested on one machine. Fixes are gated on hardware \
+detection, but detection is imperfect and your hardware may differ in ways \
+never seen here.
+
+Every fix that can be reverted says so; some cannot be. There is no \
+warranty - you are responsible for your own machine."""
 
 RISK_STYLE = {"low": "success", "medium": "warning", "high": "error"}
 STATE_TEXT = {
@@ -1203,11 +1228,42 @@ class Window(Adw.ApplicationWindow):
     # -- running a fix ----------------------------------------------------
 
     def run_action(self, action, fix):
-        """Confirm first for anything risky, then run it in a live output window."""
+        """
+        The one-time disclaimer first (apply and revert both, matching the
+        CLI), read fresh from disk rather than cached - accepted once from
+        here or from a terminal counts either way. Then confirm anything
+        risky, then run it in a live output window.
+        """
+        if not DISCLAIMER_STAMP.exists():
+            self._confirm_disclaimer(lambda: self.run_action(action, fix))
+            return
         if action == "apply" and (fix.risk == "high" or fix.danger):
             self._confirm(action, fix)
         else:
             self._execute(action, fix)
+
+    def _confirm_disclaimer(self, on_accept):
+        dialog = Adw.MessageDialog(
+            transient_for=self, modal=True,
+            heading="Before the first change",
+            body=DISCLAIMER_TEXT)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("go", "I Understand")
+        dialog.set_response_appearance("go", Adw.ResponseAppearance.DESTRUCTIVE)
+        # Cancel on Enter and on Escape: the disclaimer is not something a
+        # stray keypress should be able to wave through.
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        def respond(_d, r):
+            if r != "go":
+                return
+            # Unprivileged, same as the CLI's own write - this is a per-user
+            # marker, not a system change, so it needs no escalation.
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            DISCLAIMER_STAMP.write_text("acknowledged\n")
+            on_accept()
+        dialog.connect("response", respond)
+        dialog.present()
 
     def _confirm(self, action, fix):
         body = fix.danger or fix.notes or ""
