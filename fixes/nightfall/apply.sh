@@ -344,7 +344,10 @@ fi
 
 echo
 # Read the title back out rather than hardcoding it: the installer chooses it,
-# and it changed with the rename ('Boot Picker (touch)' -> 'Nightfall (touch)').
+# and it has changed twice already: 'Boot Picker (touch)' -> 'Nightfall (touch)'
+# with the rename, then -> 'Nightfall Boot Manager' (ef4b48b) once it stopped
+# being touch-only. Only the title moved; the --id, the markers and the
+# /boot/nightfall directory this fix actually keys on did not.
 # Telling someone to look for an entry that is not in their menu is a bad last
 # line for a fix that just rewrote how the machine boots. || true: this is
 # cosmetic, so a sed that matches nothing (a menuentry format the installer
