@@ -25,11 +25,19 @@ if picker_marker >/dev/null; then
     exit 1
 fi
 
-# The problem this solves is "no keyboard, so the boot menu cannot be
-# navigated". A machine with a keyboard attached has a working answer already,
-# but keyboards come and go on a convertible - the tablet is the normal state
-# and that is what this is for. Report the condition, not the current posture.
-#
+# Nightfall used to be Slate-only, so this required a touchscreen: the problem
+# it solved was "no keyboard, so GRUB's menu cannot be navigated". It now runs
+# on any x86-64-v2 PC and is driven by touch, keyboard or mouse, so a missing
+# touchscreen is no longer a reason to withhold it - it changes what the row
+# SAYS, not whether Apply is offered. What can still make it impossible is the
+# CPU: the kernel is built for x86-64-v2 and does not start on anything older.
+. "${FIXER_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/lib/cpu-level.sh"
+MISSING=$(cpu_x86_64_v2_missing)
+if [ -n "$MISSING" ]; then
+    echo "this CPU is missing x86-64-v2 features ($MISSING); the Nightfall kernel would not start"
+    exit 1
+fi
+
 # "wcom" (not "wacom"): confirmed missing this exact device on a real Nocturne
 # 2026-09-20 - its digitizer enumerates under its raw ACPI HID, "WCOM50C1:00
 # 2D1F:486C" (base node, plus "... Mouse", "... Stylus", "... UNKNOWN" x2 for
@@ -46,11 +54,11 @@ TOUCH=no
 for d in "$INPUT_CLASS_DIR"/input*/name; do
     grep -qiE "touchscreen|wacom|^wcom|hid.*touch" "$d" 2>/dev/null && { TOUCH=yes; break; }
 done
-if [ "$TOUCH" = no ]; then
-    echo "no touchscreen found; a touch boot menu would have nothing to read"
-    exit 1
+if [ "$TOUCH" = yes ]; then
+    echo "GRUB's menu needs a keyboard this machine may not have attached;"
+    echo "no touch boot picker is installed"
+else
+    echo "no Nightfall boot manager is installed (no touchscreen here: it is driven by keyboard and mouse)"
 fi
-
-echo "GRUB's menu needs a keyboard this machine may not have attached;"
-echo "no touch boot picker is installed"
+echo "Tested on the Google Pixel Slate and a Lenovo LOQ; other hardware is untested."
 exit 0

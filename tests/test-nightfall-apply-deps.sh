@@ -156,6 +156,13 @@ chmod +x "$BIN/curl"
 
 FAKE_KERNEL="$T/fake-vmlinuz"; echo x > "$FAKE_KERNEL"
 
+# A CPU that meets x86-64-v2, for every run, so nothing depends on the machine
+# running the tests; the refusal case swaps in one that does not.
+CPU_OK="$T/cpuinfo-v2"; CPU_OLD="$T/cpuinfo-old"
+echo "flags : fpu sse sse2 pni ssse3 cx16 sse4_1 sse4_2 popcnt lahf_lm lm" > "$CPU_OK"
+echo "flags : fpu sse sse2 pni ssse3 cx16 lahf_lm lm" > "$CPU_OLD"
+export FIXER_CPUINFO="$CPU_OK"
+
 # run [VAR=val ...] - a fresh $HOME every call, everything else fixed;
 # extra VAR=val arguments pass straight through as further overrides. Most
 # callers go through says()/lacks()/expect(), which capture run()'s output via
@@ -494,6 +501,18 @@ rm -rf "$KF_HOME"; mkdir -p "$KF_HOME/nightfall-boot-manager"; cp -r "$UP/." "$K
 mkdir -p "$KF_HOME/nightfall-boot-manager/picker-kernel"; echo STALE > "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
 says  "update mode with no network refuses rather than reinstalling the old kernel" \
       "No picker kernel image found" run_kfetch FIXER_NIGHTFALL_UPDATE=1 CURL_FAIL_API=1
+
+# ---- CPU below x86-64-v2: refused up front, before any network or build work.
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+: > "$T/log"
+CPU_OUT=$(run_kfetch FIXER_CPUINFO="$CPU_OLD" FIXER_NIGHTFALL_KERNEL="$FAKE_KERNEL" 2>&1); CPU_RC=$?
+holds "a CPU below x86-64-v2 makes apply refuse (non-zero)" "$CPU_RC" -ne 0
+says  "  naming the missing features"          "sse4_1" echo "$CPU_OUT"
+says  "  and that nothing was changed"        "Nothing was changed" echo "$CPU_OUT"
+lacks "  and it never reached the install"    "install-nightfall.sh ran" cat "$T/log"
+lacks "  or the network"                      "found https://" echo "$CPU_OUT"
+CPU_OUT=$(run_kfetch FIXER_CPUINFO="$CPU_OLD" FIXER_BUILD_ONLY=1 2>&1)
+lacks "a build check installs no kernel, so it does not care" "x86-64-v2" echo "$CPU_OUT"
 
 rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
 NO_MATCH_JSON="$T/releases-no-picker.json"

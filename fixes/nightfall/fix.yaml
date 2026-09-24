@@ -3,9 +3,6 @@ category: boot
 name: Nightfall Boot Manager (touch boot, kernel install, backup)
 risk: high
 reverts_cleanly: true
-applies_to:
-  chromebook: true
-  product: "nocturne"
 description: |
   On a tablet with no attached keyboard, GRUB's menu cannot be navigated. The
   machine boots whatever the default entry is, and picking anything else means
@@ -51,7 +48,9 @@ danger: |
 
   Nightfall falls back to booting the first discovered kernel if the display
   or touch fails, and on a timeout, so a failure is meant to be survivable
-  rather than terminal. It has been run end-to-end on exactly one machine.
+  rather than terminal. It has been run end-to-end on two machines, the Google Pixel Slate and a
+  Lenovo LOQ; anything else is untested. It needs a CPU that meets x86-64-v2
+  (about 2009 or newer) and refuses to install on one that does not.
 
   Revert removes the entry and /boot/picker entirely and touches nothing else.
 notes: |

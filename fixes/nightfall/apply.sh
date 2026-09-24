@@ -48,6 +48,20 @@ if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
     "$FIXER_REPO/lib/nightfall-cmdline-check.sh" || { echo "Nothing was changed."; exit 1; }
 fi
 
+# The kernel is built for x86-64-v2 and dies at its first unsupported
+# instruction on anything older - before there is a console to say why. The
+# same check detect runs, repeated here because apply can be reached without
+# detect (--force, a script). A build check installs no kernel, so it skips this.
+if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+    . "$FIXER_REPO/lib/cpu-level.sh"
+    CPU_MISSING=$(cpu_x86_64_v2_missing)
+    if [ -n "$CPU_MISSING" ]; then
+        echo "This CPU is missing x86-64-v2 features ($CPU_MISSING); the Nightfall"
+        echo "kernel would not start on it. Nothing was changed."
+        exit 1
+    fi
+fi
+
 # Auto-clone when truly nothing was found - not when $FIXER_NIGHTFALL_REPO was
 # given explicitly and turned out wrong, which stays a loud error rather than
 # silently cloning somewhere the user did not ask for. Not under a build

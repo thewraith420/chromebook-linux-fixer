@@ -295,8 +295,9 @@ class Window(Adw.ApplicationWindow):
         info.add(self._row("Kernel", self.machine.kernel))
         if not self.machine.is_chromebook:
             r = self._row("Warning",
-                          "This does not look like a Chromebook. Fixes are "
-                          "matched on hardware and most will not apply.")
+                          "This does not look like a Chromebook. The hardware fixes "
+                          "are matched on hardware and most will not apply; "
+                          "Nightfall works on any x86-64-v2 PC.")
             r.add_css_class("warning")
             info.add(r)
 
@@ -315,8 +316,9 @@ class Window(Adw.ApplicationWindow):
         # above it, is Nightfall's.
         nf = Adw.PreferencesGroup(
             title="Install Nightfall",
-            description="The touch boot manager this machine starts in. "
-                        "Nothing is changed until you press Apply.")
+            description="A boot manager for kernels, backups and repair - touch, "
+                        "keyboard or mouse. Nothing is changed until you press "
+                        "Apply.")
         nf.add_css_class("nightfall-heading")
         for fid in self.NIGHTFALL_FIXES:
             fix = by_id.get(fid)

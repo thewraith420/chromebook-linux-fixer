@@ -34,6 +34,13 @@ times, with no kernel panic and nothing written to any log.
 Pixel Slate). Every fix is gated on hardware detection, but detection is
 imperfect and your hardware will differ in ways the author has never seen.
 
+The one exception is **Nightfall Boot Manager**, which is not tied to a
+Chromebook: it is offered on any PC with GRUB and a CPU that meets
+**x86-64-v2** (roughly 2009 or newer), driven by touch, keyboard or mouse, and
+`apply` refuses on an older CPU before changing anything. It has been run
+end to end on two machines — the Pixel Slate and a Lenovo LOQ — and nothing
+else, so treat any other hardware as untested.
+
 **There is no warranty.** You are responsible for your own machine.
 
 Sensible precautions:

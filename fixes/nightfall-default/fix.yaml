@@ -3,9 +3,6 @@ category: boot
 name: Boot straight into Nightfall (make it the default GRUB entry)
 risk: high
 reverts_cleanly: true
-applies_to:
-  chromebook: true
-  product: "nocturne"
 prefers:
   - nightfall
 description: |
