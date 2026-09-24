@@ -147,17 +147,23 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
         # manual-instructions path below. A failed lookup is meant to be a
         # normal, handled outcome, not a crash.
         #
-        # Two asset shapes, newest naming first. The "nightfall" release
-        # (v7.2.7 onward, any x86-64 PC) publishes the kernel as a bare
-        # vmlinuz-<rel>-nightfall file next to a SHA256SUMS; the older
-        # "picker" release is a portable-installer tarball holding one
-        # boot/vmlinuz-* member. Prefer the bare file, fall back to the tarball.
+        # Three asset shapes, preferred first. The "nightfall" release
+        # (v7.2.7 onward, any x86-64 PC) publishes a kernel-only
+        # *-nightfall-kernel.tar.gz (top-level vmlinuz-<rel> + config, and
+        # deliberately NOT an installer: no install.sh, no lib/modules, so
+        # Kernels > Install rejects it), the same vmlinuz as a bare asset, and
+        # a SHA256SUMS listing both. The older "picker" release is a
+        # portable-installer tarball holding one boot/vmlinuz-* member.
         RELEASES_JSON=$(curl -fsSL "$NF_KERNEL_API" 2>/dev/null || true)
-        ASSET_URL=$(grep -oE '"browser_download_url": *"[^"]*/vmlinuz-[^"/]*nightfall"' <<<"$RELEASES_JSON" \
+        ASSET_BARE=""
+        ASSET_URL=$(grep -oE '"browser_download_url": *"[^"]*-nightfall-kernel\.tar\.gz"' <<<"$RELEASES_JSON" \
             | head -1 | sed -E 's/.*"(https[^"]*)"/\1/' || true)
-        ASSET_BARE=1
         if [ -z "$ASSET_URL" ]; then
-            ASSET_BARE=""
+            ASSET_URL=$(grep -oE '"browser_download_url": *"[^"]*/vmlinuz-[^"/]*nightfall"' <<<"$RELEASES_JSON" \
+                | head -1 | sed -E 's/.*"(https[^"]*)"/\1/' || true)
+            [ -n "$ASSET_URL" ] && ASSET_BARE=1
+        fi
+        if [ -z "$ASSET_URL" ]; then
             ASSET_URL=$(grep -oE '"browser_download_url": *"[^"]*picker[^"]*"' <<<"$RELEASES_JSON" \
                 | head -1 | sed -E 's/.*"(https[^"]*)"/\1/' || true)
         fi
@@ -181,21 +187,31 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
                 [ "$SO_FAR" -gt 0 ] && echo "  ...downloading, $(( SO_FAR / 1048576 ))MB so far"
             done
             DL_OK=""; wait "$CURL_PID" && DL_OK=1
-            if [ -n "$DL_OK" ] && [ -n "$ASSET_BARE" ]; then
-                # Bare kernel: check it against the release's SHA256SUMS when
-                # that can be fetched (a missing sums file is not fatal - the
-                # download itself was over TLS - but a MISMATCH is, and a
-                # truncated file never reaches /boot).
+            # Check the download against the release's SHA256SUMS when it can be
+            # fetched and lists this asset (a missing sums file or entry is not
+            # fatal - the download itself was over TLS - but a MISMATCH is, and
+            # a truncated or altered file never reaches /boot).
+            WANT=""; GOT=""; SUM_BAD=""
+            if [ -n "$DL_OK" ]; then
                 WANT=$(curl -fsSL "${ASSET_URL%/*}/SHA256SUMS" 2>/dev/null \
                     | awk -v f="${ASSET_URL##*/}" '$2 == f { print $1 }' || true)
                 GOT=$(sha256sum "$TARBALL" | cut -d' ' -f1)
                 if [ -n "$WANT" ] && [ "$WANT" != "$GOT" ]; then
+                    SUM_BAD=1
                     echo "  checksum mismatch (wanted $WANT, got $GOT) - not using it"
-                elif [ -s "$TARBALL" ]; then
+                elif [ -n "$WANT" ]; then
+                    echo "  checksum ok"
+                else
+                    echo "  (no SHA256SUMS entry to check against)"
+                fi
+            fi
+            if [ -n "$SUM_BAD" ]; then
+                :
+            elif [ -n "$DL_OK" ] && [ -n "$ASSET_BARE" ]; then
+                if [ -s "$TARBALL" ]; then
                     mkdir -p "$(dirname "$NF_KERNEL_STAGE")"
                     cp "$TARBALL" "$NF_KERNEL_STAGE"
                     KERNEL="$NF_KERNEL_STAGE"
-                    [ -n "$WANT" ] && echo "  checksum ok" || echo "  (no SHA256SUMS entry to check against)"
                     echo "  staged at $KERNEL"
                 fi
             elif [ -n "$DL_OK" ]; then
@@ -209,7 +225,7 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
                 # otherwise abort the whole script right here instead of
                 # reaching the graceful "no boot/vmlinuz-*" message below -
                 # same class of bug as $ASSET_URL above.
-                MEMBER=$(tar tzf "$TARBALL" 2>/dev/null | grep -E '(^|/)boot/vmlinuz-' | head -1 || true)
+                MEMBER=$(tar tzf "$TARBALL" 2>/dev/null | grep -E '^(\./)?(boot/)?vmlinuz-[^/]*$|/boot/vmlinuz-' | head -1 || true)
                 if [ -n "$MEMBER" ]; then
                     mkdir -p "$(dirname "$NF_KERNEL_STAGE")"
                     if tar xzf "$TARBALL" -O "$MEMBER" > "$NF_KERNEL_STAGE" 2>/dev/null \
@@ -221,7 +237,7 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
                         rm -f "$NF_KERNEL_STAGE"
                     fi
                 else
-                    echo "  no boot/vmlinuz-* inside that release asset"
+                    echo "  no vmlinuz-* (or boot/vmlinuz-*) inside that release asset"
                 fi
             else
                 echo "  download failed - no network, or GitHub is unreachable from here"

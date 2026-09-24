@@ -426,6 +426,42 @@ NB_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NF_JSON" CURL_FAKE_TARBALL="$NF_BARE" C
 says  "nightfall release: no SHA256SUMS available still installs, and says so" "no SHA256SUMS entry" echo "$NB_OUT"
 holds "  staged" -s "$NF_STAGE"
 
+# ---- the kernel-only tarball: top-level vmlinuz-<rel> + config, no boot/, no
+# installer files. It is preferred over the bare asset, and its checksum (listed
+# in the same SHA256SUMS) is enforced like the bare one's.
+NFT_SRC="$T/nft_src"; mkdir -p "$NFT_SRC"
+cp "$NF_BARE" "$NFT_SRC/vmlinuz-9.9.10-BobZKernel-nightfall"; echo cfg > "$NFT_SRC/config-9.9.10-BobZKernel-nightfall"
+NFT_TAR="$T/BobZKernel-9.9.10-nightfall-kernel.tar.gz"
+( cd "$NFT_SRC" && tar czf "$NFT_TAR" vmlinuz-9.9.10-BobZKernel-nightfall config-9.9.10-BobZKernel-nightfall )
+NFT_JSON="$T/releases-nightfall-tar.json"
+cat > "$NFT_JSON" <<JSON
+[
+  {"tag_name": "v9.9.10-nightfall", "assets": [
+    {"browser_download_url": "https://example.invalid/v9.9.10-nightfall/BobZKernel-9.9.10-nightfall-kernel.tar.gz"},
+    {"browser_download_url": "https://example.invalid/v9.9.10-nightfall/vmlinuz-9.9.10-BobZKernel-nightfall"},
+    {"browser_download_url": "https://example.invalid/v9.9.10-nightfall/SHA256SUMS"}]}
+]
+JSON
+NFT_GOOD="$T/sums-tar-good"; echo "$(sha256sum "$NFT_TAR" | cut -d" " -f1)  BobZKernel-9.9.10-nightfall-kernel.tar.gz" > "$NFT_GOOD"
+NFT_BAD="$T/sums-tar-bad";   echo "1111111111111111111111111111111111111111111111111111111111111111  BobZKernel-9.9.10-nightfall-kernel.tar.gz" > "$NFT_BAD"
+
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+NT_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NFT_JSON" CURL_FAKE_TARBALL="$NFT_TAR" CURL_FAKE_SUMS="$NFT_GOOD" 2>&1)
+says  "kernel-only tarball is chosen over the bare vmlinuz" "found https://example.invalid/v9.9.10-nightfall/BobZKernel-9.9.10-nightfall-kernel.tar.gz" echo "$NT_OUT"
+says  "  checksum verified" "checksum ok" echo "$NT_OUT"
+holds "  the vmlinuz member (not config) is what got staged" "$(cat "$NF_STAGE")" = "$(cat "$NF_BARE")"
+
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+NT_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NFT_JSON" CURL_FAKE_TARBALL="$NFT_TAR" CURL_FAKE_SUMS="$NFT_BAD" 2>&1)
+says  "kernel-only tarball: a checksum mismatch is refused" "checksum mismatch" echo "$NT_OUT"
+holds "  and nothing was staged" ! -e "$NF_STAGE"
+
+CFGONLY="$T/cfgonly.tar.gz"; ( cd "$NFT_SRC" && tar czf "$CFGONLY" config-9.9.10-BobZKernel-nightfall )
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+NT_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NFT_JSON" CURL_FAKE_TARBALL="$CFGONLY" CURL_FAKE_SUMS=/nonexistent 2>&1)
+says  "kernel-only tarball with no vmlinuz member is refused" "no vmlinuz-" echo "$NT_OUT"
+holds "  and nothing was staged" ! -e "$NF_STAGE"
+
 rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
 NO_MATCH_JSON="$T/releases-no-picker.json"
 echo '[{"tag_name": "v9.9.9-pixel-slate", "assets": [{"browser_download_url": "https://example.invalid/BobZKernel-9.9.9-pixel-slate-installer.tar.gz"}]}]' \
@@ -438,7 +474,7 @@ rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-man
 BAD_TARBALL="$T/not-a-kernel.tar.gz"
 ( cd "$T" && mkdir -p emptydir && tar czf "$BAD_TARBALL" emptydir )
 says  "a release asset with no boot/vmlinuz-* inside: refuses, does not stage garbage" \
-      "no boot/vmlinuz" run_kfetch CURL_FAKE_TARBALL="$BAD_TARBALL"
+      "no vmlinuz-" run_kfetch CURL_FAKE_TARBALL="$BAD_TARBALL"
 holds "  nothing was staged"                          ! -e "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
 
 reset_state; with_drm
