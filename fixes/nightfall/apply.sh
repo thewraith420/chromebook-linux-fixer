@@ -146,9 +146,21 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
         # never reaching the graceful "no picker-kernel release found" /
         # manual-instructions path below. A failed lookup is meant to be a
         # normal, handled outcome, not a crash.
-        ASSET_URL=$(curl -fsSL "$NF_KERNEL_API" 2>/dev/null \
-            | grep -oE '"browser_download_url": *"[^"]*picker[^"]*"' \
+        #
+        # Two asset shapes, newest naming first. The "nightfall" release
+        # (v7.2.7 onward, any x86-64 PC) publishes the kernel as a bare
+        # vmlinuz-<rel>-nightfall file next to a SHA256SUMS; the older
+        # "picker" release is a portable-installer tarball holding one
+        # boot/vmlinuz-* member. Prefer the bare file, fall back to the tarball.
+        RELEASES_JSON=$(curl -fsSL "$NF_KERNEL_API" 2>/dev/null || true)
+        ASSET_URL=$(grep -oE '"browser_download_url": *"[^"]*/vmlinuz-[^"/]*nightfall"' <<<"$RELEASES_JSON" \
             | head -1 | sed -E 's/.*"(https[^"]*)"/\1/' || true)
+        ASSET_BARE=1
+        if [ -z "$ASSET_URL" ]; then
+            ASSET_BARE=""
+            ASSET_URL=$(grep -oE '"browser_download_url": *"[^"]*picker[^"]*"' <<<"$RELEASES_JSON" \
+                | head -1 | sed -E 's/.*"(https[^"]*)"/\1/' || true)
+        fi
         if [ -n "$ASSET_URL" ]; then
             echo "  found $ASSET_URL"
             TMPDIR_FETCH=$(mktemp -d)   # cleaned by the shared trap at the top
@@ -168,7 +180,25 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
                 SO_FAR=$(stat -c %s "$TARBALL" 2>/dev/null || echo 0)
                 [ "$SO_FAR" -gt 0 ] && echo "  ...downloading, $(( SO_FAR / 1048576 ))MB so far"
             done
-            if wait "$CURL_PID"; then
+            DL_OK=""; wait "$CURL_PID" && DL_OK=1
+            if [ -n "$DL_OK" ] && [ -n "$ASSET_BARE" ]; then
+                # Bare kernel: check it against the release's SHA256SUMS when
+                # that can be fetched (a missing sums file is not fatal - the
+                # download itself was over TLS - but a MISMATCH is, and a
+                # truncated file never reaches /boot).
+                WANT=$(curl -fsSL "${ASSET_URL%/*}/SHA256SUMS" 2>/dev/null \
+                    | awk -v f="${ASSET_URL##*/}" '$2 == f { print $1 }' || true)
+                GOT=$(sha256sum "$TARBALL" | cut -d' ' -f1)
+                if [ -n "$WANT" ] && [ "$WANT" != "$GOT" ]; then
+                    echo "  checksum mismatch (wanted $WANT, got $GOT) - not using it"
+                elif [ -s "$TARBALL" ]; then
+                    mkdir -p "$(dirname "$NF_KERNEL_STAGE")"
+                    cp "$TARBALL" "$NF_KERNEL_STAGE"
+                    KERNEL="$NF_KERNEL_STAGE"
+                    [ -n "$WANT" ] && echo "  checksum ok" || echo "  (no SHA256SUMS entry to check against)"
+                    echo "  staged at $KERNEL"
+                fi
+            elif [ -n "$DL_OK" ]; then
                 # Exactly one member, by name, straight to its final path -
                 # never a blanket extraction. tar -O streams it to stdout and
                 # creates nothing else on disk itself, which is a narrower
@@ -198,7 +228,7 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
                 tail -3 "$TMPDIR_FETCH/curl.log" 2>/dev/null | sed 's/^/  /'
             fi
         else
-            echo "  no picker-kernel release found"
+            echo "  no nightfall (or older picker) kernel release found"
         fi
     fi
 fi

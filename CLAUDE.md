@@ -6,7 +6,7 @@ A CLI (+ GUI) that packages Chromebook Linux hardware-enablement fixes as self-c
 
 ## This is one of three related but separate Slate projects
 - **This repo** — userspace hardware-fix tool, runs on the daily-driver OS.
-- **[BobZKernel](https://github.com/thewraith420/BobZKernel)**, `pixel-slate` branch — the actual installed kernel + patches. `picker-kernel` branch — a stripped-down kernel for the touch boot picker below.
+- **[BobZKernel](https://github.com/thewraith420/BobZKernel)**, `pixel-slate` branch — the actual installed kernel + patches. `picker-kernel` branch — a stripped-down kernel for the touch boot picker below, being replaced by the **nightfall-kernel** (release `v7.2.7-nightfall`, 2026-09-23, any x86-64 PC). `nightfall apply` fetches it: bare `vmlinuz-<rel>-nightfall` asset, verified against the release's `SHA256SUMS`; the old `*-picker` tarball is only a fallback.
 - **[nightfall-boot-manager](https://github.com/thewraith420/nightfall-boot-manager)** (renamed from `nocturne-boot-picker` on 2026-09-09) — TWRP-style touch `kexec` boot manager: boots kernels, edits and remembers their command lines, installs and removes kernels, backs up and restores the system, and carries a repair menu. Installed by this repo's `nightfall` fix, and it is the Slate's default GRUB entry.
 
 They overlap more than they look like they should — see "Non-obvious overlaps" below before assuming something here is unrelated to those repos.

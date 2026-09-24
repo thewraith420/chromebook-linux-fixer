@@ -55,8 +55,10 @@ danger: |
 
   Revert removes the entry and /boot/picker entirely and touches nothing else.
 notes: |
-  Needs the nightfall-boot-manager checkout and a prebuilt picker kernel image;
-  apply says exactly what is missing and where it looked. Point it explicitly
+  Needs the nightfall-boot-manager checkout and a prebuilt kernel image; when
+  none is found locally, apply fetches BobZKernel's latest "nightfall" release
+  (a bare vmlinuz, checked against the release's SHA256SUMS; the older "picker"
+  tarball is still accepted as a fallback). Apply says exactly what is missing and where it looked. Point it explicitly
   with FIXER_NIGHTFALL_REPO=/path and FIXER_NIGHTFALL_KERNEL=/path/to/vmlinuz.
   The pre-rename FIXER_PICKER_* spellings still work.
 

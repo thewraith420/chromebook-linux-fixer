@@ -37,7 +37,7 @@ holds()  { local name="$1"; shift
 BIN="$T/bin"; MINBIN="$T/minbin"; mkdir -p "$BIN" "$MINBIN"
 for t in bash sh cat grep sed sort awk head tail cp mkdir rm mv readlink mktemp \
          dirname basename env tr cut wc du chmod touch git make gcc tar gzip \
-         ln stat sleep kill; do
+         ln stat sleep kill sha256sum; do
     p=$(type -P "$t" 2>/dev/null); [ -n "$p" ] && ln -s "$p" "$MINBIN/$t"
 done
 # Resolved NOW, against the real PATH, and handed to the apt-get stub as fixed
@@ -145,6 +145,8 @@ for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
 if [ -n "\$out" ]; then
     [ -n "\${CURL_FAIL_DOWNLOAD:-}" ] && exit 22
     cp "\${CURL_FAKE_TARBALL:-/nonexistent}" "\$out" 2>/dev/null || exit 22
+elif [ "\${url##*/}" = SHA256SUMS ]; then
+    cat "\${CURL_FAKE_SUMS:-/nonexistent}" 2>/dev/null || exit 22
 else
     [ -n "\${CURL_FAIL_API:-}" ] && exit 22
     cat "\${CURL_FAKE_API_JSON:-/nonexistent}" 2>/dev/null || exit 22
@@ -357,6 +359,8 @@ for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
 if [ -n "\$out" ]; then
     [ -n "\${CURL_FAIL_DOWNLOAD:-}" ] && exit 22
     cp "\${CURL_FAKE_TARBALL:-/nonexistent}" "\$out" 2>/dev/null || exit 22
+elif [ "\${url##*/}" = SHA256SUMS ]; then
+    cat "\${CURL_FAKE_SUMS:-/nonexistent}" 2>/dev/null || exit 22
 else
     [ -n "\${CURL_FAIL_API:-}" ] && exit 22
     cat "\${CURL_FAKE_API_JSON:-/nonexistent}" 2>/dev/null || exit 22
@@ -385,11 +389,49 @@ holds "  nothing was staged"                          ! -e "$KF_HOME/nightfall-b
 
 reset_state; with_drm
 rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+# ---- the "nightfall" release shape: a BARE vmlinuz-<rel>-nightfall asset next
+# to a SHA256SUMS, newest in the feed, ahead of the older picker tarball. It
+# must win over the picker one, be verified, and a bad checksum must not stage.
+NF_BARE="$T/vmlinuz-9.9.10-BobZKernel-nightfall"; echo "fake nightfall vmlinuz bytes" > "$NF_BARE"
+NF_JSON="$T/releases-nightfall.json"
+cat > "$NF_JSON" <<JSON
+[
+  {"tag_name": "v9.9.10-nightfall", "assets": [
+    {"browser_download_url": "https://example.invalid/v9.9.10-nightfall/config-9.9.10-BobZKernel-nightfall"},
+    {"browser_download_url": "https://example.invalid/v9.9.10-nightfall/SHA256SUMS"},
+    {"browser_download_url": "https://example.invalid/v9.9.10-nightfall/vmlinuz-9.9.10-BobZKernel-nightfall"}]},
+  {"tag_name": "v9.9.9-picker", "assets": [{"browser_download_url": "https://example.invalid/BobZKernel-9.9.9-picker-installer.tar.gz"}]}
+]
+JSON
+GOOD_SUMS="$T/sums-good"; echo "$(sha256sum "$NF_BARE" | cut -d" " -f1)  vmlinuz-9.9.10-BobZKernel-nightfall" > "$GOOD_SUMS"
+BAD_SUMS="$T/sums-bad";  echo "0000000000000000000000000000000000000000000000000000000000000000  vmlinuz-9.9.10-BobZKernel-nightfall" > "$BAD_SUMS"
+NF_STAGE="$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
+
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+NB_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NF_JSON" CURL_FAKE_TARBALL="$NF_BARE" CURL_FAKE_SUMS="$GOOD_SUMS" 2>&1)
+says  "nightfall release: the bare vmlinuz is chosen over the picker tarball" \
+      "found https://example.invalid/v9.9.10-nightfall/vmlinuz-9.9.10-BobZKernel-nightfall" echo "$NB_OUT"
+says  "  checksum verified" "checksum ok" echo "$NB_OUT"
+holds "  staged byte-for-byte" -s "$NF_STAGE"
+holds "  and its contents are the downloaded file's" "$(cat "$NF_STAGE")" = "$(cat "$NF_BARE")"
+
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+NB_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NF_JSON" CURL_FAKE_TARBALL="$NF_BARE" CURL_FAKE_SUMS="$BAD_SUMS" 2>&1)
+says  "nightfall release: a checksum mismatch is refused" "checksum mismatch" echo "$NB_OUT"
+holds "  and nothing was staged" ! -e "$NF_STAGE"
+says  "  falling through to the clear no-kernel message" "No picker kernel image found" echo "$NB_OUT"
+
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+NB_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NF_JSON" CURL_FAKE_TARBALL="$NF_BARE" CURL_FAKE_SUMS=/nonexistent 2>&1)
+says  "nightfall release: no SHA256SUMS available still installs, and says so" "no SHA256SUMS entry" echo "$NB_OUT"
+holds "  staged" -s "$NF_STAGE"
+
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
 NO_MATCH_JSON="$T/releases-no-picker.json"
 echo '[{"tag_name": "v9.9.9-pixel-slate", "assets": [{"browser_download_url": "https://example.invalid/BobZKernel-9.9.9-pixel-slate-installer.tar.gz"}]}]' \
     > "$NO_MATCH_JSON"
 says  "a feed with no picker release at all: same graceful fallback" \
-      "no picker-kernel release found" run_kfetch CURL_FAKE_API_JSON="$NO_MATCH_JSON"
+      "no nightfall (or older picker) kernel release found" run_kfetch CURL_FAKE_API_JSON="$NO_MATCH_JSON"
 
 reset_state; with_drm
 rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
