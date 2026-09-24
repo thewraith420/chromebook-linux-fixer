@@ -193,6 +193,7 @@ class Window(Adw.ApplicationWindow):
         self.set_default_size(760, self._set_height)
 
         GLib.idle_add(self.refresh_all)
+        GLib.idle_add(self.check_updates)
 
     @staticmethod
     def _screen_cap_height(fallback=900):
@@ -339,8 +340,9 @@ class Window(Adw.ApplicationWindow):
         kernels = self._build_kernels()
         backups = self._build_backups()
 
-        for group in (info, fixes_group, *grub_settings, nf, nf_settings,
-                     kernels, backups):
+        updates = self._build_updates()
+        for group in (info, fixes_group, updates, *grub_settings, nf,
+                     nf_settings, kernels, backups):
             page.add(group)
 
         # Kept so the window can be sized from what is actually on the page.
@@ -353,12 +355,139 @@ class Window(Adw.ApplicationWindow):
         self._root_header = header
         refresh = Gtk.Button(icon_name="view-refresh-symbolic",
                              tooltip_text="Re-check everything")
-        refresh.connect("clicked", lambda _b: self.refresh_all())
+        refresh.connect("clicked", lambda _b: (self.refresh_all(), self.check_updates()))
         header.pack_start(refresh)
         toolbar.add_top_bar(header)
         toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
 
         return Adw.NavigationPage(child=toolbar, title="Nightfall Boot Manager")
+
+    def _build_updates(self):
+        """
+        Updates for this tool and for Nightfall - present only when there is one.
+
+        Checked once when the window opens (in the background: git fetch and
+        the release feed are network calls, and nothing here may make the
+        window wait on them) and again from the header's refresh button. Kept
+        invisible until a check finds something behind, so a machine that is
+        up to date - or offline - sees no extra section at all. A blocked
+        update (local changes, unpushed commits) is still shown, with the
+        reason, because silence there would look like "nothing to do".
+        """
+        self._updates_group = Adw.PreferencesGroup(
+            title="Updates", visible=False,
+            description="Checked when the window opened. Nothing is changed "
+                        "until you press Update.")
+        self._upd_rows = {}
+        for key, title in (("fixer", "Chromebook Fixer"),
+                           ("nightfall", "Nightfall Boot Manager")):
+            row = Adw.ActionRow(title=title, visible=False)
+            row.set_subtitle_lines(0)
+            btn = Gtk.Button(label="Update", valign=Gtk.Align.CENTER)
+            btn.add_css_class("suggested-action")
+            btn.connect("clicked", lambda _b, k=key: self._confirm_update(k))
+            row.add_suffix(btn)
+            self._upd_rows[key] = (row, btn)
+            self._updates_group.add(row)
+        self._checking_updates = False
+        return self._updates_group
+
+    def check_updates(self):
+        """One background check; a check asked for while one runs is dropped."""
+        if self._checking_updates:
+            return False
+        self._checking_updates = True
+
+        def worker():
+            rows = {}
+            try:
+                out = subprocess.run(
+                    [str(REPO / "bin" / "chromebook-fixer"), "--no-colour",
+                     "update", "--check", "--porcelain"],
+                    capture_output=True, text=True, timeout=90).stdout
+                for line in out.splitlines():
+                    f = line.split("\t")
+                    if len(f) >= 5:
+                        rows[f[0]] = f
+            except Exception:                              # noqa: BLE001
+                pass    # offline or slow: no section, not an error
+            GLib.idle_add(self._publish_updates, rows)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+        return False
+
+    def _publish_updates(self, rows):
+        self._checking_updates = False
+        blank = ["", "na", "", "", ""]
+
+        def combine(names):
+            """The most actionable state across several components."""
+            found = [rows.get(n, blank) for n in names]
+            for want in ("blocked", "behind"):
+                hit = [f for f in found if f[1] == want]
+                if hit:
+                    return want, hit
+            return "current", []
+
+        shown = False
+        # Fixer: one component.
+        state, hit = combine(["fixer"])
+        # Nightfall: its source checkout and its kernel. Only when installed -
+        # the kernel row is "na" when it is not, and there is nothing to update.
+        nf_installed = rows.get("nightfall-kernel", blank)[1] != "na"
+        nf_state, nf_hit = combine(["nightfall-source", "nightfall-kernel"]) \
+            if nf_installed else ("current", [])
+
+        for key, st, hits in (("fixer", state, hit), ("nightfall", nf_state, nf_hit)):
+            row, btn = self._upd_rows[key]
+            row.set_visible(st in ("behind", "blocked"))
+            if st == "current":
+                continue
+            shown = True
+            lines = []
+            for f in hits:
+                if st == "behind":
+                    what = {"fixer": "this tool", "nightfall-source": "source",
+                            "nightfall-kernel": "kernel"}[f[0]]
+                    lines.append(f"{what}: {f[2]} \u2192 {f[3]}")
+                else:
+                    lines.append(f[4])
+            row.set_subtitle("\n".join(lines))
+            btn.set_sensitive(st == "behind")
+        self._updates_group.set_visible(shown)
+        return False
+
+    def _confirm_update(self, key):
+        if not DISCLAIMER_STAMP.exists():
+            self._confirm_disclaimer(lambda: self._confirm_update(key))
+            return
+        if key == "fixer":
+            # A fast-forward of this tool's own checkout; refuses anything
+            # else itself. No dialog needed.
+            self._run_update("fixer")
+            return
+        dialog = Adw.MessageDialog(
+            transient_for=self, heading="Update Nightfall?",
+            body="This pulls Nightfall's source, downloads the newest kernel "
+                 "release, rebuilds the boot UI and initramfs, and replaces "
+                 "what is in /boot/nightfall. The kernel it replaces is kept "
+                 "as vmlinuz.previous. Your other boot entries are not touched.")
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("go", "Update")
+        dialog.set_response_appearance("go", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("cancel")
+        dialog.connect("response", lambda _d, r:
+                       self._run_update("nightfall") if r == "go" else None)
+        dialog.present()
+
+    def _run_update(self, key):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        self._run_in_window(f"update {key}",
+                            [cli, "--no-colour", "update", key, "--yes"],
+                            stream=True, refresh_after=True)
+        # refresh_after re-sweeps the fixes; the update check is separate.
+        GLib.timeout_add_seconds(2, self.check_updates)
 
     def _build_kernels(self):
         """
@@ -376,8 +505,10 @@ class Window(Adw.ApplicationWindow):
 
         install_row = Adw.ActionRow(
             title="Install a kernel",
-            subtitle="From a tarball holding boot/vmlinuz-<release> and "
-                     "lib/modules/<release>/ - a BobZKernel portable "
+            # &lt; / &gt;: a subtitle is Pango markup, so a bare <release>
+            # is parsed as a tag and the whole text is dropped with a warning.
+            subtitle="From a tarball holding boot/vmlinuz-&lt;release&gt; and "
+                     "lib/modules/&lt;release&gt;/ - a BobZKernel portable "
                      "installer works as-is.")
         install_row.set_subtitle_lines(0)
         install_btn = Gtk.Button(label="Choose file…", valign=Gtk.Align.CENTER)

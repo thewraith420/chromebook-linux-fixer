@@ -11,6 +11,7 @@
     chromebook-fixer logs <id>           a fix's own diagnostic log
     chromebook-fixer backups             what Nightfall has backed up
     chromebook-fixer kernels             installed kernels, and the default
+    chromebook-fixer update              is anything behind? update fixer / Nightfall
 
 Nothing is applied without being asked for, and no fix runs unless its own
 detect script says the problem is actually present on this machine.
@@ -439,6 +440,100 @@ def cmd_boot_menu(args, c):
     return worst
 
 
+def cmd_update(args, fixes, c):
+    """
+    Check for, and apply, updates to this tool and to Nightfall.
+
+    `update` with no target only LOOKS. Updating the fixer is a fast-forward of
+    its own git checkout (lib/updates.sh refuses anything else). Updating
+    Nightfall pulls its source checkout, then re-runs the nightfall fix's own
+    apply in update mode: the newest kernel release is fetched instead of the
+    installed one being reused, the UI and initramfs are rebuilt, and the
+    kernel being replaced is kept as vmlinuz.previous.
+    """
+    script = Path(__file__).resolve().parent.parent / "lib" / "updates.sh"
+    if not os.access(script, os.X_OK):
+        print(c(f"missing {script}", RED))
+        return 2
+
+    if args.check or not args.target:
+        cmd = [str(script), "check"] + (["--porcelain"] if args.porcelain else [])
+        sys.stdout.flush()
+        return subprocess.call(cmd)
+
+    worst = 0
+    if args.target in ("fixer", "all"):
+        sys.stdout.flush()
+        worst = max(worst, subprocess.call([str(script), "pull", "fixer"]))
+    if args.target in ("nightfall", "all"):
+        worst = max(worst, _update_nightfall(script, fixes, c, args.yes))
+    return worst
+
+
+def _update_nightfall(script, fixes, c, assume_yes):
+    fix = next((f for f in fixes if f.id == "nightfall"), None)
+    if fix is None or fix.status()[0] != "applied":
+        print(c("Nightfall is not installed here, so there is nothing to update. "
+                "Install it with: chromebook-fixer apply nightfall", YELLOW))
+        return 1
+
+    # Ask what is behind before pulling or building anything.
+    proc = subprocess.run([str(script), "check", "--porcelain",
+                           "nightfall-source", "nightfall-kernel"],
+                          capture_output=True, text=True)
+    rows = {}
+    for line in proc.stdout.splitlines():
+        f = line.split("\t")
+        if len(f) >= 5:
+            rows[f[0]] = f
+    src = rows.get("nightfall-source", ["", "na", "", "", ""])
+    ker = rows.get("nightfall-kernel", ["", "unknown", "", "", ""])
+
+    for name, r in (("Nightfall source", src), ("Nightfall kernel", ker)):
+        if r[1] == "blocked":
+            print(c(f"{name}: not updating - {r[4]}. Nothing changed.", YELLOW))
+            return 1
+        if r[1] == "unknown":
+            print(c(f"{name}: could not check for updates - {r[4]}. "
+                    f"Nothing changed.", YELLOW))
+            return 1
+
+    source_behind = src[1] == "behind"
+    kernel_behind = ker[1] == "behind"
+    if not source_behind and not kernel_behind:
+        print(c("Nightfall is already up to date.", GREEN))
+        return 0
+
+    print("Nightfall update:")
+    if kernel_behind:
+        print(f"  kernel   {ker[2]} -> {ker[3]}")
+    if source_behind:
+        print(f"  source   {src[2]} -> {src[3]}  (pulled, then rebuilt)")
+    print("  The kernel being replaced is kept as /boot/nightfall/vmlinuz.previous.")
+    print("  Your other boot entries are not touched.")
+    if not assume_yes:
+        try:
+            if input("  Continue? [y/N] ").strip().lower() not in ("y", "yes"):
+                print("  skipped")
+                return 0
+        except (EOFError, KeyboardInterrupt):
+            print("\n  skipped")
+            return 0
+
+    if source_behind:
+        sys.stdout.flush()
+        rc = subprocess.call([str(script), "pull", "nightfall-source"])
+        if rc != 0:
+            return rc
+
+    # Fix.run passes os.environ through; the apply script reads this to skip
+    # "use the kernel already installed" and to rebuild the UI.
+    os.environ["FIXER_NIGHTFALL_UPDATE"] = "1"
+    sys.stdout.flush()
+    rc, _ = fix.run("apply", capture=False)
+    return rc
+
+
 def cmd_logs(args, fixes, c):
     """
     Show a fix's own log, for the fixes that keep one.
@@ -625,6 +720,17 @@ def main():
     pk.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation")
 
+    pu = sub.add_parser("update",
+                        help="check for updates to the fixer and Nightfall, and apply them")
+    pu.add_argument("target", nargs="?", choices=("fixer", "nightfall", "all"),
+                    help="what to update (omit to just check)")
+    pu.add_argument("--check", action="store_true",
+                    help="only report what is behind; change nothing")
+    pu.add_argument("--porcelain", action="store_true",
+                    help="with a check: tab-separated rows for other programs")
+    pu.add_argument("-y", "--yes", action="store_true",
+                    help="skip the confirmation")
+
     pb = sub.add_parser("backups",
                         help="the backups Nightfall has taken, and delete one")
     pb.add_argument("--delete", metavar="NAME",
@@ -675,6 +781,10 @@ def main():
         return cmd_backups(args, c)
     if args.command == "kernels":
         return cmd_kernels(args, c)
+    if args.command == "update":
+        if args.target and not args.check and not first_run_gate(c):
+            return 1
+        return cmd_update(args, fixes, c)
     if args.command == "logs":
         return cmd_logs(args, fixes, c)
     if args.command == "selftest":

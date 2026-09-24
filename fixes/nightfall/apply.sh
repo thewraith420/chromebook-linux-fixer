@@ -118,7 +118,12 @@ echo "picker source: $REPO"
 # Nightfall.
 KERNEL="${FIXER_NIGHTFALL_KERNEL:-${FIXER_PICKER_KERNEL:-}}"
 EXPLICIT_KERNEL="$KERNEL"
-if [ -z "$KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
+# FIXER_NIGHTFALL_UPDATE=1 is `chromebook-fixer update nightfall`: the point is
+# to replace what is installed, so the installed /boot/nightfall/vmlinuz must
+# never be picked up as "the kernel already found" - the newest release is
+# fetched instead, and the UI is rebuilt from the freshly pulled checkout.
+UPDATING="${FIXER_NIGHTFALL_UPDATE:-}"
+if [ -z "$KERNEL" ] && [ -z "$UPDATING" ] && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
     for c in /boot/nightfall/vmlinuz /boot/picker/vmlinuz "$REPO"/picker-kernel/vmlinuz* \
              "$HOME"/buildstuff/BobZKernel/installer-*picker*/boot/vmlinuz-*; do
         [ -r "$c" ] && { KERNEL="$c"; break; }
@@ -318,7 +323,7 @@ fi
 # binary is linked against - one built elsewhere yields a picker that does not
 # start, and it fails at boot rather than at install time, on a machine whose
 # boot menu needs a keyboard to escape.
-if [ ! -x "$REPO/ui/picker" ]; then
+if [ ! -x "$REPO/ui/picker" ] || [ -n "$UPDATING" ]; then
     echo "building the touch UI (fetches LVGL on first run)..."
     ( cd "$REPO/ui" && ./fetch-lvgl.sh && make ) || {
         echo
@@ -378,15 +383,29 @@ fi
 echo
 echo "installing (writes /boot/<picker dir> and one entry in /boot/grub/custom.cfg;"
 echo "grub.cfg is NOT regenerated and no existing entry moves)"
-if [ -n "${NIGHTFALL_CMDLINE+x}" ]; then
-    # sudo resets the environment and pkexec starts from an empty one, so the
-    # installer's own NIGHTFALL_CMDLINE lever would silently not arrive and it
-    # would fall back to /proc/cmdline - the very thing the variable was set to
-    # override. Hand it across explicitly.
-    $SUDO env NIGHTFALL_CMDLINE="$NIGHTFALL_CMDLINE" "$INSTALLER" "$KERNEL" "$IMG"
-else
-    $SUDO "$INSTALLER" "$KERNEL" "$IMG"
+# sudo resets the environment and pkexec starts from an empty one, so the
+# installer's own NIGHTFALL_CMDLINE lever would silently not arrive and it
+# would fall back to /proc/cmdline - the very thing the variable was set to
+# override. Hand it across explicitly.
+ENVARGS=()
+[ -n "${NIGHTFALL_CMDLINE+x}" ] && ENVARGS=(NIGHTFALL_CMDLINE="$NIGHTFALL_CMDLINE")
+# The installer overwrites /boot/nightfall/{vmlinuz,initramfs.img} in place, so
+# before it does, the pair being replaced is kept as *.previous - the way back
+# if the new one does not boot (copy them over the live ones from Nightfall's
+# own shell, a rescue boot, or the GRUB command line). Only when the KERNEL
+# differs: a reinstall of the same kernel (a rebuilt initramfs) must not
+# overwrite a good rollback pair with a copy of what is already there, and the
+# two files are kept as a matched pair, never one from each generation.
+$SUDO ${ENVARGS[@]+env "${ENVARGS[@]}"} bash -s -- "$INSTALLER" "$KERNEL" "$IMG" "${NF_BOOT_DIR:-/boot/nightfall}" <<'ROOT'
+set -e
+INSTALLER="$1"; KERNEL="$2"; IMG="$3"; D="$4"
+if [ -f "$D/vmlinuz" ] && ! cmp -s "$KERNEL" "$D/vmlinuz"; then
+    cp -p "$D/vmlinuz" "$D/vmlinuz.previous"
+    [ -f "$D/initramfs.img" ] && cp -p "$D/initramfs.img" "$D/initramfs.img.previous"
+    echo "kept the replaced kernel as $D/vmlinuz.previous"
 fi
+exec "$INSTALLER" "$KERNEL" "$IMG"
+ROOT
 
 echo
 # Read the title back out rather than hardcoding it: the installer chooses it,

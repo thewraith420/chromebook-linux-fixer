@@ -33,3 +33,5 @@ jobs:
         run: ./tests/test-nightfall-detect.sh
       - name: Nightfall apply auto-fix (checkout clone, missing packages)
         run: ./tests/test-nightfall-apply-deps.sh
+      - name: Updater (git fast-forward rules, kernel version comparison)
+        run: ./tests/test-updates.sh

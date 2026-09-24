@@ -37,7 +37,7 @@ holds()  { local name="$1"; shift
 BIN="$T/bin"; MINBIN="$T/minbin"; mkdir -p "$BIN" "$MINBIN"
 for t in bash sh cat grep sed sort awk head tail cp mkdir rm mv readlink mktemp \
          dirname basename env tr cut wc du chmod touch git make gcc tar gzip \
-         ln stat sleep kill sha256sum; do
+         ln stat sleep kill sha256sum cmp; do
     p=$(type -P "$t" 2>/dev/null); [ -n "$p" ] && ln -s "$p" "$MINBIN/$t"
 done
 # Resolved NOW, against the real PATH, and handed to the apt-get stub as fixed
@@ -461,6 +461,39 @@ rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-man
 NT_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NFT_JSON" CURL_FAKE_TARBALL="$CFGONLY" CURL_FAKE_SUMS=/nonexistent 2>&1)
 says  "kernel-only tarball with no vmlinuz member is refused" "no vmlinuz-" echo "$NT_OUT"
 holds "  and nothing was staged" ! -e "$NF_STAGE"
+
+# ---- rollback copy: the installer overwrites /boot/nightfall/{vmlinuz,initramfs.img}
+# in place, so a DIFFERENT incoming kernel keeps the pair being replaced as
+# *.previous, and an identical one leaves an existing rollback pair alone.
+NB="$T/nfboot"
+seed_boot() { rm -rf "$NB"; mkdir -p "$NB"; echo OLDK > "$NB/vmlinuz"; echo OLDI > "$NB/initramfs.img"; }
+NEWK="$T/newk"; echo NEWK > "$NEWK"
+seed_boot
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+RB_OUT=$(run_kfetch FIXER_NIGHTFALL_KERNEL="$NEWK" NF_BOOT_DIR="$NB" 2>&1)
+says  "a different incoming kernel is announced as kept" "kept the replaced kernel" echo "$RB_OUT"
+holds "  old kernel kept as vmlinuz.previous" "$(cat "$NB/vmlinuz.previous" 2>/dev/null)" = OLDK
+holds "  old initramfs kept as a matched pair" "$(cat "$NB/initramfs.img.previous" 2>/dev/null)" = OLDI
+seed_boot; cp "$NB/vmlinuz" "$T/samek"; echo KEEP > "$NB/vmlinuz.previous"
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+run_kfetch FIXER_NIGHTFALL_KERNEL="$T/samek" NF_BOOT_DIR="$NB" >/dev/null 2>&1
+holds "  an identical kernel leaves the existing rollback pair alone" "$(cat "$NB/vmlinuz.previous")" = KEEP
+seed_boot
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+run_kfetch FIXER_NIGHTFALL_KERNEL="$NEWK" NF_BOOT_DIR="$NB/nonexistent" >/dev/null 2>&1
+holds "  a fresh install (nothing there yet) makes no rollback files" ! -e "$NB/vmlinuz.previous"
+
+# ---- update mode: the installed kernel is never "found", the release is
+# fetched, and a failed fetch stops before touching anything.
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME/nightfall-boot-manager"; cp -r "$UP/." "$KF_HOME/nightfall-boot-manager/"
+mkdir -p "$KF_HOME/nightfall-boot-manager/picker-kernel"; echo STALE > "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
+UP_OUT=$(run_kfetch FIXER_NIGHTFALL_UPDATE=1 CURL_FAKE_API_JSON="$NFT_JSON" CURL_FAKE_TARBALL="$NFT_TAR" CURL_FAKE_SUMS="$NFT_GOOD" 2>&1)
+says  "update mode fetches even though a kernel is already on disk" "found https://example.invalid" echo "$UP_OUT"
+holds "  and stages the new one over the stale one" "$(cat "$NF_STAGE")" = "$(cat "$NF_BARE")"
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME/nightfall-boot-manager"; cp -r "$UP/." "$KF_HOME/nightfall-boot-manager/"
+mkdir -p "$KF_HOME/nightfall-boot-manager/picker-kernel"; echo STALE > "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
+says  "update mode with no network refuses rather than reinstalling the old kernel" \
+      "No picker kernel image found" run_kfetch FIXER_NIGHTFALL_UPDATE=1 CURL_FAIL_API=1
 
 rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
 NO_MATCH_JSON="$T/releases-no-picker.json"

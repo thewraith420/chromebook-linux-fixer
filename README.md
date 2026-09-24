@@ -131,7 +131,22 @@ chromebook-fixer kernels --remove <release>                # asks for the releas
 
 chromebook-fixer backups                                  # backups Nightfall has taken, on any mounted drive
 chromebook-fixer backups --delete <name>                   # asks for the name to be typed first
+
+chromebook-fixer update                                   # is the fixer, Nightfall or its kernel behind? changes nothing
+chromebook-fixer update fixer                             # fast-forward this tool's own checkout
+chromebook-fixer update nightfall                         # pull Nightfall's source, fetch the newest kernel, rebuild, replace in place
 ```
+
+**Updates.** `update` with no target only looks. Both git checkouts are
+updated fast-forward only and are refused, with the reason, when they have local
+changes or unpushed commits — nothing is merged or overwritten. `update
+nightfall` replaces `/boot/nightfall` in place and keeps the kernel it replaces
+(and its initramfs, as a matched pair) as `vmlinuz.previous` /
+`initramfs.img.previous`; a reinstall of the same kernel leaves an existing
+rollback pair alone. To go back, copy the two `.previous` files over the live
+ones from Nightfall's shell or a rescue boot. The GUI checks once when it
+opens, in the background, and shows an **Updates** section only when something
+is behind; an offline machine sees nothing extra.
 
 Nightfall itself takes and restores backups, and installs the kernel it boots
 into, from its own environment with the real root mounted read-only — neither
