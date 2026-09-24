@@ -1,6 +1,6 @@
 id: nightfall
 category: boot
-name: Nightfall Boot Manager (touch boot, kernel install, backup)
+name: Nightfall Boot Manager (touch boot, kernel install)
 risk: high
 reverts_cleanly: true
 description: |
@@ -19,7 +19,8 @@ description: |
     * edit a kernel's command line - for one boot, or remembered for every boot
     * set which kernel is the default
     * install a kernel from a tarball, and remove ones you no longer want
-    * back the system up to an external drive, and restore it again
+    * on the Pixel Slate (Nocturne) only: back the system up to an external
+      drive, and restore it again
     * a repair menu, for when the installed system will not come up
 
   It is not a bootloader replacement. GRUB stays completely unmodified: the

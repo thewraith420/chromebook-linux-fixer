@@ -692,7 +692,13 @@ class Window(Adw.ApplicationWindow):
         Seeing them and freeing space is safe from here, and it is the part
         that is otherwise a reboot into the boot manager.
         """
+        # Nightfall's own backup and restore exist on the Pixel Slate (Nocturne)
+        # only. Elsewhere the group would advertise something Nightfall cannot
+        # do, so it stays hidden - unless a scan finds backups already on a
+        # drive (see _publish_backups), which are still worth being able to
+        # free the space of.
         self._backups_group = Adw.PreferencesGroup(
+            visible=self._backups_supported(),
             title="Backups",
             description="Taken by Nightfall onto an external drive. "
                         "Nightfall takes and restores them; this frees space.")
@@ -700,6 +706,9 @@ class Window(Adw.ApplicationWindow):
         self._backups_hint = Adw.ActionRow(title="Checking for backup drives…")
         self._backups_group.add(self._backups_hint)
         return self._backups_group
+
+    def _backups_supported(self):
+        return "nocturne" in (self.machine.product or "").lower()
 
     @staticmethod
     def _scan_backups():
@@ -723,6 +732,7 @@ class Window(Adw.ApplicationWindow):
             self._backups_group.remove(row)
         self._backup_rows = []
 
+        self._backups_group.set_visible(self._backups_supported() or bool(entries))
         if not entries:
             self._backups_hint.set_title("No backups found")
             self._backups_hint.set_subtitle(

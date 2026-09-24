@@ -155,8 +155,8 @@ ones from Nightfall's shell or a rescue boot. The GUI checks once when it
 opens, in the background, and shows an **Updates** section only when something
 is behind; an offline machine sees nothing extra.
 
-Nightfall itself takes and restores backups, and installs the kernel it boots
-into, from its own environment with the real root mounted read-only — neither
+Nightfall itself installs the kernel it boots into and — on the Pixel Slate
+(Nocturne) only — takes and restores backups, from its own environment with the real root mounted read-only — neither
 of those is safe to do from the running system, so the fixer does not attempt
 either. What it adds is the part that is otherwise a reboot into the touch UI
 just to check: seeing what is installed, freeing space, and changing settings
@@ -220,7 +220,8 @@ larger since everything from there down belongs to it, is Nightfall Boot
 Manager: **Install Nightfall** (the two `boot` fixes — installing it,
 making it GRUB's default), its settings, installed **Kernels** (view, remove,
 install one from a tarball, choose Nightfall's default), and its **Backups**
-(view, delete — taking and restoring stay in Nightfall itself; see
+(Slate/Nocturne only, or wherever backups already exist: view, delete —
+taking and restoring stay in Nightfall itself; see
 [Nightfall](#nightfall) above). The CLI is unaffected: it still groups every
 fix, `boot` included, under the headings above.
 
