@@ -166,6 +166,10 @@ export FIXER_CPUINFO="$CPU_OK"
 # Not the machine's real /sbin: which tools count as installed must come only
 # from the fixture PATH unless a test hands it a sbin directory on purpose.
 export NF_SBIN_DIRS="$T/no-such-sbin"
+# Nor the machine's real /boot: this suite once broke the moment Nightfall was
+# installed on the box running it, because /boot/nightfall/vmlinuz is the first
+# place apply looks for a kernel.
+export NF_BOOT_DIR="$T/no-such-boot" NF_PICKER_BOOT_DIR="$T/no-such-picker-boot"
 
 # run [VAR=val ...] - a fresh $HOME every call, everything else fixed;
 # extra VAR=val arguments pass straight through as further overrides. Most
@@ -538,6 +542,16 @@ lacks "  and it never reached the install"    "install-nightfall.sh ran" cat "$T
 lacks "  or the network"                      "found https://" echo "$CPU_OUT"
 CPU_OUT=$(run_kfetch FIXER_CPUINFO="$CPU_OLD" FIXER_BUILD_ONLY=1 2>&1)
 lacks "a build check installs no kernel, so it does not care" "x86-64-v2" echo "$CPU_OUT"
+
+# ---- an old local BobZKernel build directory must not beat the release (a
+# stale 7.1.12 picker build on a Lenovo LOQ did exactly that).
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+DEVB="$KF_HOME/buildstuff/BobZKernel/installer-1.2.3-BobZKernel-picker/boot"; mkdir -p "$DEVB"
+echo "STALE DEV BUILD" > "$DEVB/vmlinuz-1.2.3-BobZKernel-picker"
+DV_OUT=$(run_kfetch CURL_FAKE_API_JSON="$NFT_JSON" CURL_FAKE_TARBALL="$NFT_TAR" CURL_FAKE_SUMS="$NFT_GOOD" 2>&1)
+says  "a stale local BobZKernel build dir is ignored: the release is fetched" "found https://example.invalid" echo "$DV_OUT"
+lacks "  and the stale build is not what was installed" "installer-1.2.3" echo "$DV_OUT"
+holds "  the staged kernel is the release's" "$(cat "$NF_STAGE")" = "$(cat "$NF_BARE")"
 
 rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
 NO_MATCH_JSON="$T/releases-no-picker.json"

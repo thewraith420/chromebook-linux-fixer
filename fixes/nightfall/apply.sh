@@ -150,8 +150,14 @@ EXPLICIT_KERNEL="$KERNEL"
 # fetched instead, and the UI is rebuilt from the freshly pulled checkout.
 UPDATING="${FIXER_NIGHTFALL_UPDATE:-}"
 if [ -z "$KERNEL" ] && [ -z "$UPDATING" ] && [ -z "${FIXER_BUILD_ONLY:-}" ]; then
-    for c in /boot/nightfall/vmlinuz /boot/picker/vmlinuz "$REPO"/picker-kernel/vmlinuz* \
-             "$HOME"/buildstuff/BobZKernel/installer-*picker*/boot/vmlinuz-*; do
+    # No search of ~/buildstuff/BobZKernel/installer-*picker*: that was a
+    # developer convenience, and on a machine with old build directories lying
+    # around it silently beat the release - a Lenovo LOQ (NVMe) got the stale
+    # 7.1.12 Slate picker kernel, not even the newer 7.1.13 beside it, instead
+    # of the current nightfall kernel. Someone with their own build says so:
+    # FIXER_NIGHTFALL_KERNEL=/path/to/vmlinuz.
+    for c in "${NF_BOOT_DIR:-/boot/nightfall}/vmlinuz" "${NF_PICKER_BOOT_DIR:-/boot/picker}/vmlinuz" \
+             "$REPO"/picker-kernel/vmlinuz*; do
         [ -r "$c" ] && { KERNEL="$c"; break; }
     done
 fi
@@ -300,7 +306,10 @@ fi
 # refuses to copy a file onto itself and the whole install aborts partway.
 # Hand it a copy instead, so the common "rebuild the initramfs" case works.
 KREAL=$([ -n "$KERNEL" ] && readlink -f "$KERNEL" || echo "")
-if [ "$KREAL" = /boot/nightfall/vmlinuz ] || [ "$KREAL" = /boot/picker/vmlinuz ]; then
+# -n: readlink -f prints nothing for a path under a directory that does not
+# exist, and an empty KREAL (a build check has no kernel) must not "match" that.
+if [ -n "$KREAL" ] && { [ "$KREAL" = "$(readlink -f "${NF_BOOT_DIR:-/boot/nightfall}/vmlinuz")" ] \
+   || [ "$KREAL" = "$(readlink -f "${NF_PICKER_BOOT_DIR:-/boot/picker}/vmlinuz")" ]; }; then
     TMPDIR_PICKER=$(mktemp -d)   # cleaned by the shared trap at the top
     cp "$KERNEL" "$TMPDIR_PICKER/vmlinuz"
     KERNEL="$TMPDIR_PICKER/vmlinuz"
