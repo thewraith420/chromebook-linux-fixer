@@ -96,6 +96,7 @@ EOF
 cat > "$UP/initramfs/build-initramfs.sh" <<'EOF'
 #!/bin/bash
 echo "build-initramfs ran" >> "$LOG"
+echo "kexec resolves to: $(command -v kexec || echo NOTHING)" >> "$LOG"
 head -c 256 /dev/zero > "$1"
 EOF
 chmod +x "$UP/boot-integration/install-nightfall.sh" "$UP/ui/fetch-lvgl.sh" \
@@ -162,6 +163,9 @@ CPU_OK="$T/cpuinfo-v2"; CPU_OLD="$T/cpuinfo-old"
 echo "flags : fpu sse sse2 pni ssse3 cx16 sse4_1 sse4_2 popcnt lahf_lm lm" > "$CPU_OK"
 echo "flags : fpu sse sse2 pni ssse3 cx16 lahf_lm lm" > "$CPU_OLD"
 export FIXER_CPUINFO="$CPU_OK"
+# Not the machine's real /sbin: which tools count as installed must come only
+# from the fixture PATH unless a test hands it a sbin directory on purpose.
+export NF_SBIN_DIRS="$T/no-such-sbin"
 
 # run [VAR=val ...] - a fresh $HOME every call, everything else fixed;
 # extra VAR=val arguments pass straight through as further overrides. Most
@@ -501,6 +505,27 @@ rm -rf "$KF_HOME"; mkdir -p "$KF_HOME/nightfall-boot-manager"; cp -r "$UP/." "$K
 mkdir -p "$KF_HOME/nightfall-boot-manager/picker-kernel"; echo STALE > "$KF_HOME/nightfall-boot-manager/picker-kernel/vmlinuz"
 says  "update mode with no network refuses rather than reinstalling the old kernel" \
       "No picker kernel image found" run_kfetch FIXER_NIGHTFALL_UPDATE=1 CURL_FAIL_API=1
+
+# ---- Debian keeps kexec/e2fsck in /usr/sbin and /sbin, which a regular user's
+# PATH omits. They are INSTALLED, so apply must neither ask to install them nor
+# let the initramfs build fail to find them (the Lenovo LOQ failure).
+SB="$T/sbin"; rm -rf "$SB"; mkdir -p "$SB"
+ln -s "$TRUE_REAL" "$SB/kexec"; ln -s "$TRUE_REAL" "$SB/e2fsck"
+rm -f "$MINBIN/kexec" "$MINBIN/e2fsck"
+: > "$T/apt.log"; : > "$T/log"
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+SB_OUT=$(run_kfetch FIXER_NIGHTFALL_KERNEL="$FAKE_KERNEL" NF_SBIN_DIRS="$SB" 2>&1)
+lacks "kexec that is only in /usr/sbin is not asked for again" "kexec-tools" cat "$T/apt.log"
+lacks "  nor e2fsck" "e2fsprogs" cat "$T/apt.log"
+says   "  and the initramfs build can find it" "kexec resolves to: $SB/kexec" cat "$T/log"
+says   "  and the install went ahead" "install-nightfall.sh ran" cat "$T/log"
+# and without that directory the same tools are (correctly) reported missing
+: > "$T/apt.log"; : > "$T/log"
+rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"
+run_kfetch FIXER_NIGHTFALL_KERNEL="$FAKE_KERNEL" >/dev/null 2>&1
+says   "  whereas with no sbin on PATH they still count as missing" "kexec-tools" cat "$T/apt.log"
+says   "  and package installs are non-interactive (kexec-tools asks a debconf question)" "apt-get install" cat "$T/apt.log"
+ln -sf "$TRUE_REAL" "$MINBIN/kexec"; ln -sf "$TRUE_REAL" "$MINBIN/e2fsck"
 
 # ---- CPU below x86-64-v2: refused up front, before any network or build work.
 rm -rf "$KF_HOME"; mkdir -p "$KF_HOME"; cp -r "$UP" "$KF_HOME/nightfall-boot-manager"

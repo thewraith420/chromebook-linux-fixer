@@ -2,6 +2,18 @@
 set -euo pipefail
 SUDO="${FIXER_SUDO:-sudo}"
 
+# The sbin directories, on PATH. Debian does not put /usr/sbin or /sbin on a
+# regular user's PATH (Ubuntu and Mint do, which is why this worked on the
+# Slate and the stick and failed on a Debian 13 Lenovo LOQ): kexec, e2fsck and
+# efibootmgr live there, this script's own "is it installed" checks use
+# `command -v`, and so does Nightfall's build-initramfs.sh - which then died
+# with "kexec not found" for a package that was installed. Appended, not
+# prepended, so anything the user put ahead of them still wins.
+# NF_SBIN_DIRS is overridable so tests are not at the mercy of the machine's
+# real /sbin.
+PATH="$PATH:${NF_SBIN_DIRS-/usr/local/sbin:/usr/sbin:/sbin}"
+export PATH
+
 # One shared cleanup trap for every temp dir this script can create (the
 # kernel-fetch's download, and the kernel-reuse copy further down) - `trap
 # ... EXIT` REPLACES a previous handler rather than adding to it, so two
@@ -78,7 +90,7 @@ if [ -z "$INSTALLER" ] && [ -z "$EXPLICIT_REPO" ] && [ -z "${FIXER_BUILD_ONLY:-}
     if ! command -v git >/dev/null 2>&1; then
         if command -v apt-get >/dev/null 2>&1; then
             echo "  installing git"
-            $SUDO apt-get install -y git || {
+            $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y git || {
                 echo "could not install git - install it yourself, then re-run:"
                 echo "  sudo apt install git"; echo "Nothing was changed."; exit 1; }
         else
@@ -151,7 +163,7 @@ if [ -z "$KERNEL" ] && [ -z "$EXPLICIT_KERNEL" ] && [ -z "${FIXER_BUILD_ONLY:-}"
     if ! command -v curl >/dev/null 2>&1; then
         if command -v apt-get >/dev/null 2>&1; then
             echo "  installing curl"
-            $SUDO apt-get install -y curl || echo "  could not install curl - skipping the fetch"
+            $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y curl || echo "  could not install curl - skipping the fetch"
         fi
     fi
     if command -v curl >/dev/null 2>&1; then
@@ -318,7 +330,7 @@ if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
     if [ -n "$MISSING_PKGS" ]; then
         if command -v apt-get >/dev/null 2>&1; then
             echo "installing missing build/boot dependencies:$MISSING_PKGS"
-            $SUDO apt-get install -y $MISSING_PKGS || {
+            $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $MISSING_PKGS || {
                 echo "could not install:$MISSING_PKGS"
                 echo "  sudo apt install$MISSING_PKGS"
                 echo "Nothing was changed."
