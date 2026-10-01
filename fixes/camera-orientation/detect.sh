@@ -1,5 +1,10 @@
 #!/bin/bash
 set -uo pipefail
+
+# FIXER_REPO is normally set by Fix.run(); default it so this still works
+# when run by hand (set -u would otherwise kill it outright, which reads
+# as "not needed" - a quiet wrong answer rather than a loud one).
+FIXER_REPO="${FIXER_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SENSOR=""
 for s in imx319 imx355 ov5670 ov8856; do
     SD=$("$FIXER_REPO/lib/find-subdev.sh" "$s" 2>/dev/null)

@@ -1,6 +1,11 @@
 #!/bin/bash
 # exit 0 = needed, 1 = not needed / not applicable, 2 = cannot tell
 set -uo pipefail
+
+# FIXER_REPO is normally set by Fix.run(); default it so this still works
+# when run by hand (set -u would otherwise kill it outright, which reads
+# as "not needed" - a quiet wrong answer rather than a loud one).
+FIXER_REPO="${FIXER_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 [ -d /sys/bus/pci/devices/0000:00:05.0 ] || exit 1     # no ImgU
 
 # Already replaced by a DKMS build of ours?

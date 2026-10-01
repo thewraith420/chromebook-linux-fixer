@@ -75,7 +75,15 @@ active_bootloader() {
     # looks exactly like a rEFInd boot to the test above, and this reported
     # "refind" on a machine that had booted through GRUB. Check the picker
     # first, and only then fall through.
-    if grep -q "BOOT_IMAGE=" /proc/cmdline 2>/dev/null; then
+    #
+    # This is status-only (cmd_status), never consulted by a detect/verify
+    # decision - but an unreadable cmdline must still say so rather than
+    # silently falling through to a guess at which loader is active, the
+    # same reason cmd_active and cmd_picker_drift refuse to guess.
+    local proc="${PROC_CMDLINE:-/proc/cmdline}"
+    if [ ! -r "$proc" ]; then
+        echo "unknown (cannot read $proc)"
+    elif grep -q "BOOT_IMAGE=" "$proc" 2>/dev/null; then
         echo grub
     elif picker_installed && [ -f /boot/grub/grub.cfg ]; then
         echo "grub (kexec via boot picker)"
@@ -144,22 +152,23 @@ present_configs() {
 # or, worse, credits a kernel quirk for a state a cmdline parameter produced.
 # Callers should map 2 onto their own "cannot tell" exit rather than guessing.
 cmd_active() {
-    local param="$1"
-    if [ ! -r /proc/cmdline ]; then
-        echo "cannot read /proc/cmdline ($(stat -c '%A %U:%G (uid %u gid %g)' /proc/cmdline \
+    local param="$1" proc="${PROC_CMDLINE:-/proc/cmdline}"
+    if [ ! -r "$proc" ]; then
+        echo "cannot read $proc ($(stat -c '%A %U:%G (uid %u gid %g)' "$proc" \
               2>/dev/null || echo 'not present'))" >&2
         return 2
     fi
-    grep -qE "(^| )${param//./\\.}( |$)" /proc/cmdline
+    grep -qE "(^| )${param//./\\.}( |$)" "$proc"
 }
 
 cmd_status() {
+    local proc="${PROC_CMDLINE:-/proc/cmdline}"
     echo "active bootloader: $(active_bootloader)"
-    if [ -r /proc/cmdline ]; then
-        echo "running cmdline:   $(cat /proc/cmdline)"
+    if [ -r "$proc" ]; then
+        echo "running cmdline:   $(cat "$proc")"
     else
         echo "running cmdline:   UNREADABLE" \
-             "($(stat -c '%A %U:%G (uid %u gid %g)' /proc/cmdline 2>/dev/null || echo absent))"
+             "($(stat -c '%A %U:%G (uid %u gid %g)' "$proc" 2>/dev/null || echo absent))"
         echo "                   every check against the running kernel reads"
         echo "                   'cannot tell' until this is readable"
     fi

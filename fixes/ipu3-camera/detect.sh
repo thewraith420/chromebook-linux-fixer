@@ -2,6 +2,11 @@
 # exit 0 = needed, 1 = not needed / not applicable, 2 = cannot tell
 set -uo pipefail
 
+# FIXER_REPO is normally set by Fix.run(); default it so this still works
+# when run by hand (set -u would otherwise kill it outright, which reads
+# as "not needed" - a quiet wrong answer rather than a loud one).
+FIXER_REPO="${FIXER_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
 # Applicable only where an IPU3 CIO2 exists with a supported sensor.
 [ -d /sys/bus/pci/devices/0000:00:14.3 ] || exit 1
 SENSOR=""

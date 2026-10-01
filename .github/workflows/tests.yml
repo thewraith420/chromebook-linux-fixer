@@ -39,3 +39,7 @@ jobs:
         run: ./tests/test-ec-buttons.sh
       - name: Panel brightness AUX (kernel-drives-it standdown is informative, not a refusal)
         run: ./tests/test-panel-brightness-aux.sh
+      - name: audio-avs-dsp cmdline (unreadable /proc/cmdline must never read as "absent")
+        run: ./tests/test-audio-avs-dsp-cmdline.sh
+      - name: Waydroid LXC hook (post-stop fix + proc/cmdline containment)
+        run: ./tests/test-waydroid-lxc-hook.sh

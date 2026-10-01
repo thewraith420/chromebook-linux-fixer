@@ -77,6 +77,23 @@ entry "i915.enable_psr=1"
 expect "drift: same key, different value"               0 drift "ro i915.enable_psr=0"
 expect "drift: unreadable cmdline cannot tell"          2 env PICKER_CFG="$T/c.cfg" PROC_CMDLINE="$T/missing" "$KCL" picker-drift
 
+# ---- cmd_active / cmd_status: the same "cannot tell" rule, for every other
+# fix that asks "is this parameter already on the running cmdline" through
+# kernel-cmdline.sh active. /proc/cmdline going unreadable while the machine
+# runs (see waydroid-lxc-hook) must read as "cannot tell", never as "absent" -
+# the latter makes an already-applied cmdline fix look needed again. --------
+printf '%s\n' "ro quiet i915.enable_dpcd_backlight=2" > "$T/cmdline"
+expect "active: parameter present on a readable cmdline"     0 env PROC_CMDLINE="$T/cmdline" "$KCL" active i915.enable_dpcd_backlight=2
+expect "active: parameter absent on a readable cmdline"      1 env PROC_CMDLINE="$T/cmdline" "$KCL" active iommu=pt
+expect "active: unreadable cmdline is 'cannot tell', not 'absent'" 2 env PROC_CMDLINE="$T/missing" "$KCL" active iommu=pt
+says()   { local name="$1" pat="$2"; shift 2; local out; out=$("$@" 2>&1)
+    if grep -q -- "$pat" <<< "$out"; then pass=$((pass + 1))
+    else fail=$((fail + 1)); echo "FAIL  $name  (no '$pat' in: $out)"; fi; }
+says  "status: unreadable cmdline is reported, not silently blank" "UNREADABLE" \
+      env PROC_CMDLINE="$T/missing" PICKER_CFG="$T/c.cfg" "$KCL" status
+says  "status: active bootloader says 'unknown' rather than guessing" "unknown" \
+      env PROC_CMDLINE="$T/missing" PICKER_CFG="$T/c.cfg" "$KCL" status
+
 # ---- boot-menu: what `show` says Nightfall will use -------------------------
 # By value, as Nightfall's init reads it: padded digits of any length are the
 # number they spell (confirmed by the Nightfall session under dash and busybox

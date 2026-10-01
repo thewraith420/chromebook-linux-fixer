@@ -2,6 +2,11 @@
 # exit 0 = needed, 1 = not needed / not applicable, 2 = cannot tell
 set -uo pipefail
 
+# FIXER_REPO is normally set by Fix.run(); default it so this still works
+# when run by hand (set -u would otherwise kill it outright, which reads
+# as "not needed" - a quiet wrong answer rather than a loud one).
+FIXER_REPO="${FIXER_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
 # Every path below is overridable so this can be exercised fixture-only, the
 # same way every other detect.sh in this repo is (GRUB_DIR, CUSTOM_CFG,
 # INPUT_CLASS_DIR elsewhere) - defaults are the real paths, unchanged.

@@ -2,9 +2,14 @@
 # exit 0 = needed, 1 = not needed / not applicable, 2 = cannot tell
 set -uo pipefail
 
+# Overridable so this can be driven fixture-only (see tests/) - defaults are
+# the real paths, unchanged.
+DSP_DRIVER_PARAM="${DSP_DRIVER_PARAM:-/sys/module/snd_intel_dspcfg/parameters/dsp_driver}"
+MODPROBE_D_DIR="${MODPROBE_D_DIR:-/etc/modprobe.d}"
+
 # The dsp_driver override only means anything where snd-intel-dspcfg drives the
 # choice. If that knob is absent, this platform/kernel is not applicable.
-[ -e /sys/module/snd_intel_dspcfg/parameters/dsp_driver ] || exit 1
+[ -e "$DSP_DRIVER_PARAM" ] || exit 1
 
 # Only the platforms the upstream AVS driver actually covers - Skylake, Kaby
 # Lake and Apollo Lake. Gate on the audio controller's PCI id. Extend as boards
@@ -29,8 +34,27 @@ done
 # Already forced (cmdline or a modprobe.d option)? then nothing to do. This
 # also stands down cleanly when chromebook-linux-audio has configured the
 # machine - its /etc/modprobe.d/snd-avs.conf matches this same pattern.
-grep -qsE "snd[-_]intel[-_]dspcfg\.dsp_driver=" /proc/cmdline && exit 1
-grep -rqsE "snd[-_]intel[-_]dspcfg[[:space:]].*dsp_driver" /etc/modprobe.d/ 2>/dev/null && exit 1
+#
+# modprobe.d first, since it never depends on /proc/cmdline being readable -
+# cheapest way to avoid the next check's readability problem entirely when
+# this is how the parameter was actually set.
+grep -rqsE "snd[-_]intel[-_]dspcfg[[:space:]].*dsp_driver" "$MODPROBE_D_DIR/" 2>/dev/null && exit 1
+
+# /proc/cmdline can go unreadable while this machine is running - mode 0440,
+# owned by some other uid, observed to start the moment Waydroid's container
+# runs (see waydroid-lxc-hook; a leaked procfs permission change, not this
+# fix's doing). grep -qs on an unreadable file fails silently and "&&" then
+# just falls through, which would read as "the parameter is absent" - wrongly
+# reporting an already-applied cmdline fix as still needed. Say "cannot tell"
+# instead of guessing.
+PROC_CMDLINE="${PROC_CMDLINE:-/proc/cmdline}"
+if [ -r "$PROC_CMDLINE" ]; then
+    grep -qsE "snd[-_]intel[-_]dspcfg\.dsp_driver=" "$PROC_CMDLINE" && exit 1
+else
+    echo "cannot read $PROC_CMDLINE to check whether dsp_driver is already" \
+         "forced there"
+    exit 2
+fi
 
 # SAFETY: never touch a working setup. If a real analog output already exists,
 # the current driver is fine - stand down. Needs the session to ask PipeWire;

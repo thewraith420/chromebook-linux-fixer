@@ -1,10 +1,13 @@
 id: waydroid-lxc-hook
 category: android
-name: Waydroid container restart after any stop
+name: Waydroid container restart and /proc/cmdline containment
 risk: low
 reverts_cleanly: true
 applies_to: {}
 description: |
+  Two unrelated LXC config problems, fixed together because they live in the
+  same two files and share one backup.
+
   Waydroid's own LXC template sets "lxc.hook.post-stop = /dev/null". Modern LXC
   tries to execute that path literally, fails with exit 126, and refuses to
   start the container again. The symptom is that Waydroid works once, and then
@@ -13,6 +16,26 @@ description: |
   Replaces the hook with /bin/true in both the shipped template and the live
   per-session config, which is generated once and not refreshed from the
   template.
+
+  Separately: Android inside the container appears to chmod/chown the HOST's
+  real /proc/cmdline. Observed going from world-readable to mode 0440 (owned
+  by one of Android's internal uids) the moment Waydroid starts - a procfs
+  entry's permission bits are believed to live in a struct shared with the
+  host's own mount of the same file, so a change made from inside the
+  container's mount namespace leaks out. Every unprivileged reader of
+  /proc/cmdline on the host breaks the moment this happens, until reboot -
+  several of this fixer's own detect/verify scripts included.
+
+  Adds "lxc.mount.entry = ... proc/cmdline none bind,ro,optional,create=file"
+  to both config files: a private, read-only copy of the host's cmdline
+  (refreshed on every apply) that the container's own Android init can touch
+  all it wants without ever reaching the real file. This is containment, not
+  a guess at why Android touches it in the first place - the root cause is
+  not proven, so the fix does not depend on it being right.
 danger: |
   Edits files owned by the waydroid package; an upgrade will overwrite them and
   the fix will need re-applying. Originals are backed up alongside.
+
+  The containment mount is "optional": if it fails for any reason (an older
+  LXC, a missing snapshot file), the container still starts, with the
+  original bug intact rather than failing to boot over it.
