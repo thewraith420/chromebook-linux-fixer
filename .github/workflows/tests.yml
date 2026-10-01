@@ -35,3 +35,7 @@ jobs:
         run: ./tests/test-nightfall-apply-deps.sh
       - name: Updater (git fast-forward rules, kernel version comparison)
         run: ./tests/test-updates.sh
+      - name: EC button delivery (firmware-fixed-IRQ standdown, double-keypress guard)
+        run: ./tests/test-ec-buttons.sh
+      - name: Panel brightness AUX (kernel-drives-it standdown is informative, not a refusal)
+        run: ./tests/test-panel-brightness-aux.sh

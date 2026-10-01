@@ -37,7 +37,7 @@ They are maintained on a separate kernel build machine and published in
 | `9204-iommu-vtd-ipu3-imgu-identity-domain.patch` | puts the ImgU in an IOMMU identity domain | yes |
 | `9205-v4l2loopback-in-tree-module.patch` | vendors v4l2loopback 0.15.3 as an in-tree module | yes |
 | `9206-hid-google-hammer-null-check.patch` | fixes a NULL deref that crashed on module load | yes — the module blacklist was dropped after |
-| `9207-acpi-goog0007-sta-override-nocturne.patch` | forces GOOG0007 present so the volume buttons work | yes |
+| `9207-acpi-goog0007-sta-override-nocturne.patch` | forces GOOG0007 present so the volume buttons work | yes — **obsolete as of MrChromebox firmware 2609**, which fixes the `_STA` bug natively; BobZKernel is dropping it |
 | `9208-i915-nocturne-disable-psr-dmi-quirk.patch` | disables PSR via DMI quirk instead of `i915.enable_psr=0` | **no — compile-checked only** |
 
 Read that last column before relying on any of these. 9208 has never been
@@ -52,8 +52,14 @@ Two of these bear directly on fixes in this repository:
   is open instead of rotating the image). 9205 still earns its place for
   Waydroid's external-camera HAL, which wants a plain V4L2 device the IPU3
   nodes cannot provide.
-- **9207** is the one volume-button failure this repository has no answer for.
-  See below.
+- **9207** targeted one of the two volume-button failures described below -
+  GOOG0007 reporting absent. That bug is now fixed in firmware (MrChromebox
+  2609), so 9207 is obsolete there and BobZKernel is dropping it. The *other*
+  failure (the EC's own interrupt never refiring) is still live on firmware
+  older than SlateFirmware's patch 0001b, which fixes it at the ACPI/_CRS
+  level and is being upstreamed to MrChromebox; `ec-buttons-poll`'s detection
+  (`lib/ec-buttons.sh irq-live`) checks for that fix directly rather than
+  assuming the fault is permanent. See below.
 
 **[nocturne-ipu3-camera](https://github.com/thewraith420/nocturne-ipu3-camera)**
 carries the camera ones again as standalone patches, alongside the libcamera
@@ -78,13 +84,27 @@ different fixes, and each one can hide the other.
 so MKBP events pile up in a FIFO nobody drains. Volume keys, the sensor FIFO
 and lid angle all go quiet together, typically after some uptime rather than
 immediately. Patch 9201 fixes it in-kernel; `ec-buttons-poll` does the same
-job from userspace.
+job from userspace. The root cause is firmware: a 2022 downstream patch
+dropped the EC's own interrupt resource from CREC's `_CRS`. SlateFirmware's
+patch 0001b restores it (upstreaming to MrChromebox); confirmed live on a
+Slate running MrChromebox-2609.0-1-gf2fbda7cf0, where a stock kernel needs
+neither 9201 nor `ec-buttons-poll` - the EC's own interrupt (a second
+`chromeos-ec` line in `/proc/interrupts`, alongside the FPMCU's) delivers
+natively. `ec-buttons-poll`'s detection checks for exactly this
+(`lib/ec-buttons.sh irq-live`) and stands down when it finds it, because
+running the userspace poller alongside a working native path does not merely
+duplicate effort - it double-fires every button press.
 
 **GOOG0007 is hidden.** Firmware reports `_STA = 0` for the ACPI device
 `cros_ec_keyb` binds to, so that driver never probes and no volume-button input
 device is ever created. Buttons are dead from the first boot after the firmware
 changed — on the Pixel Slate, a MrChromebox update (2606.1; 2512.1 was fine).
-Patch 9207 forces the status back. **This repository ships no equivalent.**
+Patch 9207 forces the status back. **As of MrChromebox 2609 this is fixed in
+firmware itself** - `GOOG0007:00/status` reads `15` and `cros-ec-keyb` binds
+with no patch needed, which is why 9207 is being dropped. This repository
+still ships no *kernel-side* equivalent for older firmware (there is nothing
+useful a userspace fix can do about a hidden ACPI device either - see "Why
+there is no userspace fix for GOOG0007" below) - but on 2609+ none is needed.
 
 They interact in a way that is easy to misread:
 

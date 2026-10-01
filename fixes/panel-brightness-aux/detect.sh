@@ -2,9 +2,16 @@
 # exit 0 = needed, 1 = not needed / not applicable, 2 = cannot tell
 set -uo pipefail
 
+# Overridable so this can be driven fixture-only (see tests/) - defaults are
+# the real paths, unchanged. Shared names with apply.sh on purpose.
+DRM_DP_AUX_DIR="${DRM_DP_AUX_DIR:-/sys/class/drm_dp_aux_dev}"
+BACKLIGHT_DIR="${BACKLIGHT_DIR:-/sys/class/backlight}"
+DMI_SYS_VENDOR="${DMI_SYS_VENDOR:-/sys/class/dmi/id/sys_vendor}"
+DMI_PRODUCT_NAME="${DMI_PRODUCT_NAME:-/sys/class/dmi/id/product_name}"
+
 # Needs an internal DisplayPort panel with an AUX channel to talk to.
 HAVE_EDP=1
-for dev in /sys/class/drm_dp_aux_dev/drm_dp_aux*; do
+for dev in "$DRM_DP_AUX_DIR"/drm_dp_aux*; do
     [ -e "$dev" ] || continue
     case "$(readlink -f "$dev")" in
         *-eDP-*) HAVE_EDP=0 ;;
@@ -14,7 +21,7 @@ done
 
 # And a sysfs backlight interface to follow. Without one there is nothing to
 # mirror - the desktop would have nothing to write to either.
-ls /sys/class/backlight/*/brightness >/dev/null 2>&1 || exit 1
+ls "$BACKLIGHT_DIR"/*/brightness >/dev/null 2>&1 || exit 1
 
 # Already running ours?
 systemctl is-active chromebook-panel-brightness-aux.service >/dev/null 2>&1 && exit 1
@@ -22,14 +29,18 @@ systemctl is-active chromebook-panel-brightness-aux.service >/dev/null 2>&1 && e
 # Whether the kernel already drives this panel's DPCD registers itself
 # (a patched i915, or a future kernel that grew support) cannot be answered
 # without reading /dev/drm_dp_aux*, which needs root - and detection runs
-# unprivileged. apply.sh does that check properly and refuses to install if
-# the kernel turns out to be driving them, so the worst case here is offering
-# a fix that then declines to install itself.
+# unprivileged. apply.sh checks properly (as root) and installs either way:
+# the daemon runs the same probe fresh at every startup and stands itself
+# down on a kernel that drives DPCD on its own, which is the correct state on
+# a system that dual-boots into more than one kernel. verify.sh (also
+# unprivileged, via the daemon's own --why) is what reports that standing-down
+# as "nothing for this fix to do" rather than "broken" - so the worst case
+# here is offering an install that the daemon then sits idle on.
 #
 # Board specific, so only offer where the dead-backlight fault is confirmed.
 # Add boards here as they are verified.
-VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo)
-PRODUCT=$(cat /sys/class/dmi/id/product_name 2>/dev/null || echo)
+VENDOR=$(cat "$DMI_SYS_VENDOR" 2>/dev/null || echo)
+PRODUCT=$(cat "$DMI_PRODUCT_NAME" 2>/dev/null || echo)
 case "$VENDOR/$PRODUCT" in
     Google/Nocturne) ;;                      # Pixel Slate — confirmed
     *)
@@ -63,7 +74,7 @@ esac
 # becomes exit 2 on hardware this fix would have helped. apply.sh's DPCD probe
 # is the backstop either way, since it observes rather than infers.
 BL_MAX=
-for d in /sys/class/backlight/*/max_brightness; do
+for d in "$BACKLIGHT_DIR"/*/max_brightness; do
     [ -r "$d" ] && { BL_MAX=$(cat "$d" 2>/dev/null); break; }
 done
 case "${BL_MAX:-}" in

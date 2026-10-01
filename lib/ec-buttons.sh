@@ -4,6 +4,9 @@
 #   ec-buttons.sh goog0007    0 = cros-ec-keyb NOT bound (buttons dead)
 #                             1 = bound and working
 #                             2 = cannot tell
+#   ec-buttons.sh irq-live     0 = the EC's own interrupt is present (fixed firmware)
+#                              1 = only the FPMCU's interrupt line exists (pre-fix firmware)
+#                              2 = cannot tell
 #
 # There are two independent ways the volume buttons die on a Chrome EC
 # convertible, and they need opposite responses:
@@ -78,7 +81,48 @@ goog0007_status() {
     return 2
 }
 
+# ec_lpc_irq_live - does the LPC EC (not the FPMCU) have its own interrupt?
+#
+# The Pixel Slate's volume-button dead-delivery fault is "the EC MKBP
+# interrupt fires once at boot and never again" - fixed at the firmware level
+# by SlateFirmware's patch 0001b, which restores the main EC's interrupt
+# resource that a 2022 downstream patch dropped from CREC's _CRS. Confirmed
+# live on a Slate running MrChromebox-2609.0-1-gf2fbda7cf0 (SlateFirmware,
+# 2026-09-30): a stock/generic kernel with that firmware shows the EC's own
+# IRQ (113 on that unit) and needs neither a kernel-side poll
+# (ec_event_poll_ms) nor this fix's userspace one.
+#
+# Every Pixel Slate also has an FPMCU (the fingerprint reader in the power
+# button - see fixes/cros-fp-fingerprint), on its own SPI bus, which registers
+# an interrupt under the identical label: /sys/kernel/irq/<n>/actions reads
+# "chromeos-ec" for BOTH the FPMCU's line and the main EC's, with no further
+# text to tell them apart by name (confirmed on a real unit, both pre- and
+# post-fix). What DOES distinguish them is COUNT: the FPMCU's line exists
+# either way, so there is always at least one "chromeos-ec" row in
+# /proc/interrupts; firmware that drops the main EC's own interrupt resource
+# never gets a second one allocated, so pre-fix there is exactly one such row
+# and post-fix there are (at least) two. This check is scoped to boards this
+# fix is offered on at all (Nocturne, gated by the caller) specifically
+# because it relies on "exactly one FPMCU line always present" being true -
+# it would not mean the same thing on a Chrome EC board with no FPMCU.
+#
+# This is a STATIC proxy, not a live delivery test (pressing a button and
+# checking an event arrives) - a script cannot do that. If SlateFirmware's own
+# testing ever finds a case where the row count does not track whether events
+# are actually delivered, trust that over this comment and come back here.
+#
+# PROC_INTERRUPTS overrides the path, for tests.
+ec_lpc_irq_live() {
+    local f="${PROC_INTERRUPTS:-/proc/interrupts}" n
+    [ -r "$f" ] || return 2
+    n=$(grep -c '\bchromeos-ec\b' "$f")
+    [ "$n" -ge 2 ] && return 0
+    [ "$n" -ge 1 ] && return 1
+    return 2    # no "chromeos-ec" line at all: no Chrome EC visible here
+}
+
 case "${1:-}" in
     goog0007) goog0007_status ;;
-    *) echo "usage: $0 goog0007" >&2; exit 2 ;;
+    irq-live) ec_lpc_irq_live ;;
+    *) echo "usage: $0 goog0007|irq-live" >&2; exit 2 ;;
 esac

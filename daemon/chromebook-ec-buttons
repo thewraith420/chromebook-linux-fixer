@@ -84,10 +84,41 @@ def log(msg):
 # every startup, in the kernel we actually booted.
 EC_POLL_PARAM = "/sys/module/cros_ec/parameters/ec_event_poll_ms"
 KEYB_DRIVER = "/sys/bus/platform/drivers/cros-ec-keyb"
+PROC_INTERRUPTS = os.environ.get("PROC_INTERRUPTS", "/proc/interrupts")
+
+
+def _keyb_bound():
+    return sorted(glob.glob(KEYB_DRIVER + "/GOOG0007:*"))
+
+
+def _ec_irq_live():
+    """
+    Does the LPC EC (not the FPMCU) have its own interrupt now?
+
+    Same check as lib/ec-buttons.sh's ec_lpc_irq_live, duplicated here rather
+    than shelled out to, since this runs as a tight poll loop candidate and a
+    subprocess per decision would be needless overhead - kept in exact sync
+    with that script's reasoning and comments; read those for the full case
+    for counting "chromeos-ec" interrupt rows instead of matching a number.
+    One extra reason this check belongs here as well as in detect.sh: a
+    machine that already has this service installed is not reinstalled when
+    firmware is updated later, so without this the service would go on
+    double-firing every press (its own synthetic key alongside the now-working
+    native one) until someone noticed and reverted it by hand.
+    """
+    try:
+        with open(PROC_INTERRUPTS) as fh:
+            n = sum(1 for line in fh if "chromeos-ec" in line)
+    except OSError:
+        return False
+    return n >= 2
 
 
 def kernel_already_handles():
     """Is the running kernel already delivering these buttons? (bool, why)."""
+    if _ec_irq_live() and _keyb_bound():
+        return True, "the EC's own interrupt is present (firmware fix) and cros_ec_keyb is bound"
+
     try:
         with open(EC_POLL_PARAM) as fh:
             poll_ms = int(fh.read().strip())
@@ -100,7 +131,7 @@ def kernel_already_handles():
     # to GOOG0007 to become key presses. A kernel with 9201 but not 9207 has
     # healthy delivery and dead buttons, and standing down there would leave
     # the user with nothing at all.
-    bound = sorted(glob.glob(KEYB_DRIVER + "/GOOG0007:*"))
+    bound = _keyb_bound()
     if not bound:
         return False, (f"kernel polls every {poll_ms}ms but cros-ec-keyb is not "
                        "bound (GOOG0007 hidden), so nothing consumes those events")

@@ -31,10 +31,15 @@ danger: |
   sandboxed to that device class and nothing else. Revert disables and
   removes it cleanly.
 
-  Do not run this on a kernel whose own DPCD backlight support already works
-  (a kernel carrying patch 9200, for instance): both would drive the same
-  registers. Apply refuses to install when it detects the kernel is already
-  driving them.
+  Two writers on one panel's DPCD registers would be a bug, not a problem by
+  itself: install is not refused on a kernel whose own DPCD backlight support
+  already works (a kernel carrying patch 9200, for instance), because the
+  service checks this itself, properly, at every startup, and stands idle
+  rather than fight the kernel for the same registers - the one-shot check
+  apply used to do before installing could be fooled by a desktop's automatic
+  brightness nudging the panel mid-check (dc5a29d), and refusing then would
+  block installing on a system that boots more than one kernel and genuinely
+  needs this on some of them.
 
   The service refuses to set a fully dark panel even if asked to, since a
   black screen on a tablet with no external display is hard to recover from.
