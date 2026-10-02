@@ -26,12 +26,20 @@ description: |
   /proc/cmdline on the host breaks the moment this happens, until reboot -
   several of this fixer's own detect/verify scripts included.
 
-  Adds "lxc.mount.entry = ... proc/cmdline none bind,ro,optional,create=file"
-  to both config files: a private, read-only copy of the host's cmdline
+  Adds "lxc.mount.entry = ... proc/cmdline none bind,optional,create=file" to
+  both config files: a private, READ-WRITE copy of the host's cmdline
   (refreshed on every apply) that the container's own Android init can touch
   all it wants without ever reaching the real file. This is containment, not
   a guess at why Android touches it in the first place - the root cause is
   not proven, so the fix does not depend on it being right.
+
+  It must be read-write. Android's first-stage init does a FATAL CHECKCALL
+  chmod("/proc/cmdline", 0440) while booting; a read-only bind turns that
+  into EROFS and init aborts, killing the container on every boot. A version
+  of this fix that bound it read-only shipped briefly (2026-09-30, reverted
+  2026-10-01) and broke Waydroid on real hardware - do not reintroduce ",ro".
+  The chmod/chown Android does now lands on the snapshot file instead of the
+  real one, which is the containment working as intended.
 danger: |
   Edits files owned by the waydroid package; an upgrade will overwrite them and
   the fix will need re-applying. Originals are backed up alongside.
@@ -39,3 +47,7 @@ danger: |
   The containment mount is "optional": if it fails for any reason (an older
   LXC, a missing snapshot file), the container still starts, with the
   original bug intact rather than failing to boot over it.
+
+  A config still carrying the old read-only form (",ro,") is detected and
+  migrated in place, not left alone - that form is a container that fails to
+  boot, not a working install, so it must never read as "already applied".
