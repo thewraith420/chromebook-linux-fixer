@@ -494,11 +494,12 @@ def cmd_update(args, fixes, c):
         sys.stdout.flush()
         worst = max(worst, subprocess.call([str(script), "pull", "fixer"]))
     if args.target in ("nightfall", "all"):
-        worst = max(worst, _update_nightfall(script, fixes, c, args.yes))
+        worst = max(worst, _update_nightfall(script, fixes, c, args.yes,
+                                             args.nightfall_cmdline))
     return worst
 
 
-def _update_nightfall(script, fixes, c, assume_yes):
+def _update_nightfall(script, fixes, c, assume_yes, nightfall_cmdline=None):
     fix = next((f for f in fixes if f.id == "nightfall"), None)
     if fix is None or fix.status()[0] != "applied":
         print(c("Nightfall is not installed here, so there is nothing to update. "
@@ -561,6 +562,8 @@ def _update_nightfall(script, fixes, c, assume_yes):
     # Fix.run passes os.environ through; the apply script reads this to skip
     # "use the kernel already installed" and to rebuild the UI.
     os.environ["FIXER_NIGHTFALL_UPDATE"] = "1"
+    if nightfall_cmdline is not None:
+        os.environ["NIGHTFALL_CMDLINE"] = nightfall_cmdline
     sys.stdout.flush()
     rc, _ = fix.run("apply", capture=False)
     return rc
@@ -769,6 +772,9 @@ def main():
                     help="with a check: tab-separated rows for other programs")
     pu.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation")
+    pu.add_argument("--nightfall-cmdline", metavar="OPTIONS", default=None,
+                    help="when Nightfall's entry carries i915 options this boot lacks: "
+                         "the options to keep, or an empty string to drop them")
 
     pb = sub.add_parser("backups",
                         help="the backups Nightfall has taken, and delete one")

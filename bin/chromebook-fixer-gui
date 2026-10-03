@@ -483,13 +483,45 @@ class Window(Adw.ApplicationWindow):
                        self._run_update("nightfall") if r == "go" else None)
         dialog.present()
 
-    def _run_update(self, key):
+    def _run_update(self, key, nightfall_cmdline=None):
         cli = str(REPO / "bin" / "chromebook-fixer")
-        self._run_in_window(f"update {key}",
-                            [cli, "--no-colour", "update", key, "--yes"],
-                            stream=True, refresh_after=True)
+        cmd = [cli, "--no-colour", "update", key, "--yes"]
+        if nightfall_cmdline is not None:
+            cmd += ["--nightfall-cmdline", nightfall_cmdline]
+        on_exit = self._offer_i915_choice if key == "nightfall" else None
+        self._run_in_window(f"update {key}", cmd, stream=True,
+                            refresh_after=True, on_exit=on_exit)
         # refresh_after re-sweeps the fixes; the update check is separate.
         GLib.timeout_add_seconds(2, self.check_updates)
+
+    def _offer_i915_choice(self, rc, output):
+        """
+        Exit 3 from the Nightfall guard: this boot has no i915 options and the
+        entry does. Keep them, or drop them - the person decides, never the GUI.
+        """
+        if rc != 3:
+            return
+        line = next((l for l in output.splitlines() if l.startswith("NF_I915_ENTRY=")), None)
+        if line is None:
+            return
+        options = line.split("=", 1)[1].strip()
+        dialog = Adw.MessageDialog(
+            transient_for=self, heading="Keep the panel options?",
+            body=f"Nightfall's boot entry has {options}, but this boot has none.\n\n"
+                 "Keep them: the entry keeps these options, as it does now.\n\n"
+                 "Drop them: the entry carries none. Choose this only if this "
+                 "kernel lights the panel without them - otherwise Nightfall "
+                 "may come up dark.")
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("keep", "Keep them")
+        dialog.add_response("drop", "Drop them")
+        dialog.set_response_appearance("drop", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("keep")
+        dialog.connect("response", lambda _d, r: {
+            "keep": lambda: self._run_update("nightfall", options),
+            "drop": lambda: self._run_update("nightfall", ""),
+        }.get(r, lambda: None)())
+        dialog.present()
 
     def _build_kernels(self):
         """
@@ -1597,7 +1629,8 @@ class Window(Adw.ApplicationWindow):
                             [cli, "--no-colour", "logs", fix.id],
                             stream=False, refresh_after=False)
 
-    def _run_in_window(self, title, cmd, stream=True, refresh_after=True):
+    def _run_in_window(self, title, cmd, stream=True, refresh_after=True,
+                       on_exit=None):
         win = Adw.Window(transient_for=self, modal=True,
                          default_width=680, default_height=440,
                          title=title)
@@ -1621,19 +1654,24 @@ class Window(Adw.ApplicationWindow):
         append(f"$ {' '.join(cmd)}\n\n")
 
         def worker():
+            captured = []
             try:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, env=askpass_env())
                 if stream:
                     for line in proc.stdout:
+                        captured.append(line)
                         GLib.idle_add(append, line)
                     proc.wait()
                 else:
                     out = proc.stdout.read()
                     proc.wait()
+                    captured.append(out)
                     GLib.idle_add(append, out)
                 GLib.idle_add(append, f"\n[finished, exit {proc.returncode}]\n")
+                if on_exit:
+                    GLib.idle_add(on_exit, proc.returncode, "".join(captured))
             except Exception as exc:                      # noqa: BLE001
                 GLib.idle_add(append, f"\nfailed to run: {exc}\n")
             GLib.idle_add(close.set_sensitive, True)

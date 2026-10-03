@@ -48,7 +48,7 @@ expect "normal boot, same options"                      0 check "ro quiet splash
 expect "normal boot, an option added and booted"        0 check "ro quiet $PANEL i915.x=1"
 expect "normal boot after a revert, fewer options"      0 check "ro quiet i915.enable_psr=0"
 expect "recovery boot, entry has options"               1 check "$RECOVERY"
-expect "no i915 while the entry has some"               1 check "ro quiet splash"
+expect "no i915 while the entry has some"               3 check "ro quiet splash"
 expect "unreadable cmdline"                             1 env -u NIGHTFALL_CMDLINE PICKER_CFG="$T/c.cfg" PROC_CMDLINE="$T/missing" "$CHECK"
 expect "recovery boot with explicit override"           0 override "$RECOVERY" "i915.enable_psr=0"
 
@@ -60,7 +60,10 @@ expect "ONLY-WORD: nomodeset boot still carrying i915"  1 check "ro quiet nomode
 expect "ONLY-WORD: recovery boot still carrying i915"   1 check "ro recovery $PANEL"
 
 # The case where the no-options rule is the only thing that refuses.
-expect "ONLY-EMPTY: one-time edit dropped every i915"   1 check "ro quiet splash"
+expect "ONLY-EMPTY: one-time edit dropped every i915"   3 check "ro quiet splash"
+holds_sentinel() { local out; out=$(check "ro quiet splash"); grep -qx "NF_I915_ENTRY=$PANEL" <<<"$out"; }
+expect "ONLY-EMPTY: names the entry's options for the GUI" 0 holds_sentinel
+expect "ONLY-EMPTY: an explicit empty override is accepted" 0 override "ro quiet splash" ""
 
 # Allowed on purpose.
 entry ""

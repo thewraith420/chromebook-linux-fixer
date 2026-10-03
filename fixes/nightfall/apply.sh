@@ -57,7 +57,9 @@ INSTALLER=$(find_installer || true)
 # the two auto-provisioning steps below - neither should touch the network or
 # $HOME on a run that was always going to refuse here anyway.
 if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
-    "$FIXER_REPO/lib/nightfall-cmdline-check.sh" || { echo "Nothing was changed."; exit 1; }
+    CHECK_RC=0
+    "$FIXER_REPO/lib/nightfall-cmdline-check.sh" || CHECK_RC=$?
+    if [ "$CHECK_RC" -ne 0 ]; then echo "Nothing was changed."; exit "$CHECK_RC"; fi
 fi
 
 # The kernel is built for x86-64-v2 and dies at its first unsupported

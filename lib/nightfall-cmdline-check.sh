@@ -4,6 +4,10 @@
 #
 #   exit 0 = safe to (re)install Nightfall from this boot
 #   exit 1 = refuse; the reason is printed
+#   exit 3 = refuse, but only because this boot lacks i915 options Nightfall's
+#            entry carries. The line "NF_I915_ENTRY=<options>" is printed too,
+#            so the GUI can offer to keep them (NIGHTFALL_CMDLINE=<options>) or
+#            drop them (NIGHTFALL_CMDLINE=) rather than just failing.
 #
 # install-nightfall.sh does not edit its boot entry. It deletes the whole
 # marked block and writes a fresh one whose i915 options come from
@@ -61,7 +65,8 @@ if [ -z "$running" ] && [ -n "$existing" ]; then
     echo "Installing would drop them. That usually means a one-time edited command"
     echo "line rather than a real change - reboot normally and apply from there, or"
     echo "set NIGHTFALL_CMDLINE if the entry really should carry none."
-    exit 1
+    echo "NF_I915_ENTRY=$existing"
+    exit 3
 fi
 
 echo "Nightfall's entry will carry this boot's i915 options: ${running:-(none)}"
