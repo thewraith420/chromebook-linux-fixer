@@ -140,6 +140,34 @@ rc_packages_for() {
         | grep -E '^linux-' || true
 }
 
+# Releases where dpkg still has rc-state linux-* packages but NEITHER a
+# vmlinuz NOR a /lib/modules directory exists any more - invisible to
+# orphan_modules() (which only looks under $MODULES, so a directory deleted
+# by hand after the kernel itself was removed hides the rc entries from
+# everything else here) and to a normal removal (nothing under $BOOT to even
+# find). Seen live, Slate session, 2026-10-02: /lib/modules/7.0.0-31-generic
+# gone, three rc packages for 7.0.0-31 still in dpkg.
+#
+# Package names are stripped of their recognised linux-* prefixes to recover
+# the release string; several packages (image, modules, headers, ...) share
+# one release, so the result is de-duplicated. Fuzzier than rc_packages_for()
+# (which is handed a release it already knows, not asked to recover one from
+# an arbitrary package name), but the prefix list covers Debian/Ubuntu's own
+# kernel package naming, which is what dpkg-query itself is scoped to here.
+rc_only_releases() {
+    command -v dpkg-query >/dev/null 2>&1 || return 0
+    dpkg-query -W -f '${Package} ${Status}\n' 'linux-*' 2>/dev/null \
+        | awk '$NF == "config-files" { print $1 }' \
+        | sed -E 's/^linux-(image|headers|modules-extra|modules|tools|cloud-tools|buildinfo)-//' \
+        | sort -u \
+        | while IFS= read -r r; do
+            [ -n "$r" ] || continue
+            [ -f "$BOOT/vmlinuz-$r" ] && continue
+            [ -d "$MODULES/$r" ] && continue
+            printf '%s\n' "$r"
+        done
+}
+
 bytes_of() {   # total bytes of everything belonging to a release
     local r="$1" total=0 f
     for f in "$BOOT/vmlinuz-$r" "$BOOT/initrd.img-$r" "$BOOT/System.map-$r" \
@@ -255,13 +283,26 @@ cmd_list() {
                    "$r" "$(human "$size")"
         fi
     done
+    for r in $(rc_only_releases); do
+        local rc_pkgs2; rc_pkgs2=$(rc_packages_for "$r")
+        if [ "$tab" = --tab ]; then
+            printf '%s\t0\t%s\torphan\tmodules\n' "$r" "${rc_pkgs2//$'\n'/,}"
+        else
+            printf '  %-38s %7s  removed but not purged by apt, no files remain (%s still owns it)\n' \
+                   "$r" "" "$(echo $rc_pkgs2 | tr '\n' ' ')"
+        fi
+    done
     local key
     cmdline_orphans | while IFS= read -r key; do
         if [ "$tab" = --tab ]; then
             printf '%s\t\t\torphan\tcmdline\n' "$key"
         else
-            printf '  %-38s %7s  saved cmdline override with no matching kernel: %s\n' \
-                   "" "" "$key"
+            # $key in column 1, same as orphan module rows put $r there - a
+            # blank column 1 reads as a continuation of the row above it
+            # (that is how this function's own flag lines are written), so
+            # an orphan with nothing there looked like it belonged to
+            # whichever kernel happened to print immediately before it.
+            printf '  %-38s %7s  cmdline override has no matching kernel\n' "$key" ""
         fi
     done
     return 0
@@ -447,11 +488,20 @@ cmd_remove() {
     # An orphan module tree is not a kernel: no guards about booting apply,
     # because nothing boots it.
     if [ ! -f "$BOOT/vmlinuz-$r" ]; then
-        [ -d "$MODULES/$r" ] || die "no kernel or modules for '$r' - nothing removed"
-        [ "$r" = "$RUNNING" ] && die "refusing to touch the running kernel's modules ($r)"
-        local size; size=$(du -sb "$MODULES/$r" 2>/dev/null | cut -f1 || echo 0)
-        echo "removing leftover modules for $r ($(human "$size")); no kernel is installed for it"
         local rc_pkgs; rc_pkgs=$(rc_packages_for "$r")
+        # A release can be dpkg-owned (rc state) with NO files left at all -
+        # the modules directory deleted by hand after the kernel itself was
+        # already gone, seen live (Slate session, 2026-10-02). Accept that
+        # as a valid target too, not just "the directory still exists".
+        [ -d "$MODULES/$r" ] || [ -n "$rc_pkgs" ] || \
+            die "no kernel or modules for '$r' - nothing removed"
+        [ "$r" = "$RUNNING" ] && die "refusing to touch the running kernel's modules ($r)"
+        if [ -d "$MODULES/$r" ]; then
+            local size; size=$(du -sb "$MODULES/$r" 2>/dev/null | cut -f1 || echo 0)
+            echo "removing leftover modules for $r ($(human "$size")); no kernel is installed for it"
+        else
+            echo "no files remain for $r, but dpkg still has it in rc state"
+        fi
         if [ -n "$rc_pkgs" ]; then
             # dpkg still claims this directory (apt remove without --purge):
             # go through apt, or the files come back deleted but dpkg still

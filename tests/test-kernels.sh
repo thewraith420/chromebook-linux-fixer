@@ -33,6 +33,16 @@ case "$rel" in
     # remove` without --purge leaves behind. Modelled on a real one: Software
     # Updater left linux-modules-7.0.0-31-generic exactly like this.
     *rcleft*) printf 'linux-image-%s deinstall ok config-files\nlinux-modules-%s deinstall ok config-files\n' "$rel" "$rel" ;;
+    # The broad 'linux-*' listing rc_only_releases() itself makes - pattern
+    # strips to exactly "linux-". A release with NO files anywhere left (rc
+    # state only), plus an ordinary installed one as a red herring to prove
+    # currently-installed kernels are not flagged by this path.
+    linux-) [ -n "${DPKGONLY_FIXTURE:-}" ] && printf 'linux-image-7.0.0-99-dpkgonly-generic deinstall ok config-files\nlinux-modules-7.0.0-99-dpkgonly-generic deinstall ok config-files\nlinux-image-7.0.0-31-generic install ok installed\n'; true ;;
+    # The SAME release, now queried individually by rc_packages_for() (as
+    # cmd_list/cmd_remove do once rc_only_releases() has named it) - must
+    # still read as rc state here too, ahead of the generic *generic* case
+    # below, which this release's name would otherwise also match.
+    *7.0.0-99-dpkgonly-generic*) printf 'linux-image-7.0.0-99-dpkgonly-generic deinstall ok config-files\nlinux-modules-7.0.0-99-dpkgonly-generic deinstall ok config-files\n' ;;
     *generic*) printf 'linux-image-%s install ok installed\nlinux-modules-%s install ok installed\nnot-a-kernel-%s install ok installed\n' "$rel" "$rel" "$rel" ;;
 esac
 STUB
@@ -377,6 +387,12 @@ printf '/boot/vmlinuz-9.9.9-removed-long-ago\troot=/dev/old\n' > "$CMDFILE"
 says  "list flags an orphaned cmdline override"        "no matching kernel" "$K" list
 says  "  names the stale key"                           "9.9.9-removed-long-ago" "$K" list
 says  "tab output marks it orphan/cmdline"               "orphan	cmdline" "$K" list --tab
+# Real bug, seen live (Slate session, 2026-10-02): a blank first column reads
+# as a continuation of whichever row printed immediately before it (that is
+# how this function's own flags line is written), so the orphan line looked
+# like it belonged to the last kernel listed rather than being its own row.
+holds "  the orphan line is not a blank-prefixed continuation" \
+      -n "$("$K" list | grep 'no matching kernel' | grep -v '^[[:space:]]*$' | awk '{print $1}')"
 # the no-/boot-prefix convention is also checked, under $BOOT
 printf '/vmlinuz-9.9.9-also-gone\troot=/dev/old\n' > "$CMDFILE"
 says  "  works for the no-/boot-prefix convention too"   "9.9.9-also-gone" "$K" list
@@ -422,6 +438,40 @@ printf '/boot/vmlinuz-7.2.3-BobZKernel\troot=/dev/x\n' > "$CMDFILE"
 holds  "remove leaves an unrelated kernel's override untouched" \
        "$(cat "$CMDFILE")" = "$(printf '/boot/vmlinuz-7.2.3-BobZKernel\troot=/dev/x')"
 
+# ---- dpkg-only orphans: rc-state packages with NO files left anywhere -----
+# Real case, Slate session 2026-10-02: /lib/modules/<release> deleted by
+# hand after the kernel itself was already gone, but dpkg still has three
+# rc-state packages for it - invisible to orphan_modules() (nothing under
+# $MODULES to find) and to a plain removal attempt (nothing under $BOOT
+# either), until rc_only_releases() asks dpkg directly instead of starting
+# from what is on disk.
+reset_all
+export DPKGONLY_FIXTURE=1
+says  "list surfaces a dpkg-only orphan (no files anywhere)" \
+      "7.0.0-99-dpkgonly-generic" "$K" list
+says  "  says no files remain, not 'leftovers'"            "no files remain" "$K" list
+says  "  names the owning packages"                         "linux-image-7.0.0-99-dpkgonly-generic" "$K" list
+says  "tab output marks it orphan/modules, like a real leftover dir" \
+      "orphan	modules" "$K" list --tab
+holds "  and carries the owning packages in the 3rd tab field" \
+      "$("$K" list --tab | grep 7.0.0-99-dpkgonly-generic | cut -f3)" = \
+      "linux-image-7.0.0-99-dpkgonly-generic,linux-modules-7.0.0-99-dpkgonly-generic"
+lacks "  a normally-installed kernel is not swept up by the broad dpkg query" \
+      "7.0.0-31-generic.*no files remain" "$K" list
+
+expect "remove purges a dpkg-only orphan through apt" 0 \
+       "$K" remove 7.0.0-99-dpkgonly-generic
+says   "  says no files remain rather than claiming a directory was removed" \
+       "no files remain" "$K" remove 7.0.0-99-dpkgonly-generic
+: > "$APT_LOG"
+"$K" remove 7.0.0-99-dpkgonly-generic >/dev/null 2>&1
+says   "  purges exactly its own rc-state packages" \
+       "apt-get -y purge linux-image-7.0.0-99-dpkgonly-generic linux-modules-7.0.0-99-dpkgonly-generic" \
+       cat "$APT_LOG"
+expect "a release with genuinely nothing (no files, no dpkg entry) still refuses" 1 \
+       "$K" remove 9.9.9-nothing-at-all-generic
+says   "  and says why"  "nothing removed" "$K" remove 9.9.9-nothing-at-all-generic
+unset DPKGONLY_FIXTURE
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
