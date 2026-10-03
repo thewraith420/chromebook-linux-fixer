@@ -6,6 +6,7 @@
 #   kernels.sh remove <release>
 #   kernels.sh default <release>|--clear|--show
 #   kernels.sh install <tarball> [--default]
+#   kernels.sh cmdline <release> [--show|--set <full cmdline>|--reset] [--force]
 #
 # Yes, this is userspace work: a kernel is /boot/vmlinuz-<release>, its
 # initrd, its /lib/modules tree and a GRUB entry. The care is in WHICH one and
@@ -40,12 +41,45 @@
 #      Nightfall's own remove-kernel.sh does the same, because a stale marker
 #      silently stops working with no clue why.
 # update-grub runs afterwards, or grub.cfg keeps offering what is gone.
+#
+# CMDLINE. /boot/nightfall-cmdline is Nightfall's own per-kernel command-line
+# override file, one line per kernel: "<key><TAB><full cmdline>". Its format
+# was confirmed with the nightfall-boot-manager session, 2026-10-02, against
+# their actual source (apply-cmdline.sh, init) rather than assumed:
+#   - A missing line means no override; the row passes through grub.cfg's own
+#     entry untouched. There is no separate fallback value - nothing else.
+#   - The KEY has no fixed path convention and must be an EXACT STRING MATCH
+#     against column 2 of grub.cfg's own "linux" directive for that kernel -
+#     apply-cmdline.sh does a plain `$2 in want`, zero normalization. On a
+#     machine where /boot is its own partition that is typically a bare
+#     /vmlinuz-<release> (no /boot prefix), because GRUB's "root" for that
+#     entry IS the boot partition. Never reconstruct this from the release
+#     string - always read it from grub.cfg itself, same as cmd_default
+#     already does for its own marker, falling back to the computed guess
+#     (grub_path) only when grub.cfg has not picked the kernel up yet.
+#   - Comments (optional leading whitespace then #) and blank lines are
+#     skipped. Duplicate keys: the LAST line wins. An empty value after the
+#     tab is never an override, the same as no line at all - to clear one,
+#     delete the line outright, never write an empty value.
+#   - No locking concern: Nightfall only reads this pre-boot, in its own
+#     initramfs, which cannot overlap with this script running on a live,
+#     normally-booted OS. Back it up, write it, never touch grub.cfg.
+#   - Pruning on removal matches by the stored key's OWN vmlinuz-<release>
+#     suffix, not by reconstructing "the" key for the release being removed -
+#     grub.cfg may already be stale (or already regenerated) by the time a
+#     removal runs, so the file's existing keys are the only reliable source.
+#     Orphan detection (an override whose kernel is gone) checks each stored
+#     key verbatim as a path, trying it directly and then under $BOOT (a
+#     separate-/boot key has no /boot prefix from GRUB's point of view, but
+#     this script runs on the live OS, where that partition IS mounted at
+#     $BOOT) - same "don't reconstruct, check what's there" principle.
 set -uo pipefail
 
 SUDO="${FIXER_SUDO:-sudo}"
 BOOT="${FIXER_BOOT_DIR:-/boot}"
 MODULES="${FIXER_MODULES_DIR:-/lib/modules}"
 NF_DEFAULT_FILE="${NF_DEFAULT_FILE:-$BOOT/nightfall-default}"
+NF_CMDLINE_FILE="${NF_CMDLINE_FILE:-$BOOT/nightfall-cmdline}"
 GRUB_CFG="${FIXER_GRUB_CFG:-/boot/grub/grub.cfg}"
 FIXER_REPO_HINT="${FIXER_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # Where install extracts a tarball's boot/ and lib/ paths onto: always / in
@@ -138,6 +172,54 @@ grub_path() {
     else printf '%s/vmlinuz-%s' "$BOOT" "$r"; fi
 }
 
+# Any saved cmdline override for a release, matched by the stored key's own
+# vmlinuz-<release> suffix (see the CMDLINE note above for why, not an exact
+# key). Comments/blank lines skipped, last matching line wins, an empty value
+# never counts as an override. World-readable once this script has written
+# it (chmod 0644, same as NF_DEFAULT_FILE), so this needs no privilege.
+cmdline_for() {
+    local release="$1"
+    [ -f "$NF_CMDLINE_FILE" ] || return 0
+    awk -F'\t' -v suf="vmlinuz-$release" '
+        /^[ \t]*#/ { next }
+        /^[ \t]*$/ { next }
+        $1 ~ (suf "$") { val = ""; for (i = 2; i <= NF; i++) val = val (i > 2 ? "\t" : "") $i }
+        END { if (val != "") print val }
+    ' "$NF_CMDLINE_FILE"
+}
+
+# Every override line whose kernel is gone: the key no longer resolves to a
+# real file, checked two ways since a key may or may not carry the /boot
+# prefix (see the CMDLINE note above) - directly, then under $BOOT for the
+# separate-/boot convention, which has no /boot prefix from GRUB's own point
+# of view but needs one here, since this script runs on the live OS where
+# that partition is mounted at $BOOT rather than being its own root.
+cmdline_orphans() {
+    [ -f "$NF_CMDLINE_FILE" ] || return 0
+    local key real
+    awk -F'\t' '
+        /^[ \t]*#/ { next }
+        /^[ \t]*$/ { next }
+        { print $1 }
+    ' "$NF_CMDLINE_FILE" | while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        # Substitute $BOOT for both conventions before checking, rather than
+        # the literal "/boot" prefix (a no-op in production, where BOOT
+        # really is /boot, but what makes this testable against a fake one):
+        # the same-partition convention writes "/boot/vmlinuz-X" and the
+        # separate-/boot one writes a bare "/vmlinuz-X" - either way, BOOT is
+        # where this live OS actually has that partition mounted.
+        case "$key" in
+            /boot/*) real="$BOOT/${key#/boot/}" ;;
+            /*)      real="$BOOT$key" ;;
+            *)       real="$key" ;;
+        esac
+        [ -f "$real" ] && continue
+        [ -f "$key" ] && continue
+        printf '%s\n' "$key"
+    done
+}
+
 cmd_list() {
     local tab="${1:-}" r pkg size flags def path
     def=$(nf_default)
@@ -151,6 +233,7 @@ cmd_list() {
         [ -n "$def" ] && [ "${def##*/vmlinuz-}" = "$r" ] && flags="${flags:+$flags,}default"
         [ -f "$BOOT/initrd.img-$r" ] || flags="${flags:+$flags,}no-initrd"
         [ -d "$MODULES/$r" ] || flags="${flags:+$flags,}no-modules"
+        [ -n "$(cmdline_for "$r")" ] && flags="${flags:+$flags,}cmdline-override"
         if [ "$tab" = --tab ]; then
             printf '%s\t%s\t%s\t%s\tkernel\n' "$r" "$size" "${pkg:-}" "$flags"
         else
@@ -170,6 +253,15 @@ cmd_list() {
         else
             printf '  %-38s %7s  modules with no kernel - leftovers, safe to remove\n' \
                    "$r" "$(human "$size")"
+        fi
+    done
+    local key
+    cmdline_orphans | while IFS= read -r key; do
+        if [ "$tab" = --tab ]; then
+            printf '%s\t\t\torphan\tcmdline\n' "$key"
+        else
+            printf '  %-38s %7s  saved cmdline override with no matching kernel: %s\n' \
+                   "" "" "$key"
         fi
     done
     return 0
@@ -207,6 +299,147 @@ ROOT
     echo "takes effect on the next boot through Nightfall."
 }
 
+cmd_cmdline() {
+    local release="$1"; shift
+    case "$release" in */*|"") die "implausible kernel release: '$release'" ;; esac
+    [ -f "$BOOT/vmlinuz-$release" ] || die "no $BOOT/vmlinuz-$release - run '$0 list' to see what is installed"
+
+    local action=show value="" force=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --show)   action=show ;;
+            --set)    action=set
+                      [ $# -ge 2 ] || die "usage: $0 cmdline <release> --set <full cmdline>"
+                      value="$2"; shift ;;
+            --reset)  action=reset ;;
+            --force)  force=1 ;;
+            *) die "usage: $0 cmdline <release> [--show|--set <cmdline>|--reset] [--force]" ;;
+        esac
+        shift
+    done
+
+    if [ "$action" = set ]; then
+        [ -n "$value" ] || die "refusing to save an empty cmdline"
+        case "$value" in *"$(printf '\t')"*) die "cmdline cannot contain a literal tab - the save format is tab-delimited" ;; esac
+        case "$value" in *root=*) ;; *) die "refusing to save a cmdline with no root= - the kernel would not know what to mount" ;; esac
+    fi
+
+    if [ "$action" = show ]; then
+        # Fast, unprivileged path: once saved, an override is a normal
+        # world-readable file (0644, same as NF_DEFAULT_FILE) - no need to
+        # touch grub.cfg (0600) just to report what is already known.
+        local existing; existing=$(cmdline_for "$release")
+        if [ -n "$existing" ]; then
+            echo "override (saved in $NF_CMDLINE_FILE):"
+            echo "  $existing"
+            return 0
+        fi
+        echo "no override saved; reading GRUB's own entry (needs root - grub.cfg is 0600)"
+    fi
+
+    $SUDO bash -s -- "$release" "$NF_CMDLINE_FILE" "$GRUB_CFG" "$(grub_path "$release")" \
+                      "$action" "$value" "$force" <<'ROOT'
+set -euo pipefail
+release="$1"; cmdfile="$2"; cfg="$3"; fallback_key="$4"; action="$5"; value="$6"; force="$7"
+
+# The exact grub.cfg key for this release - NOT reconstructed, see the
+# CMDLINE note at the top of this script. Falls back to the computed guess
+# only when grub.cfg has not picked this kernel up yet (apply-cmdline.sh
+# treats an unmatched key as inert, same as apply-default.sh does for the
+# default marker, so writing the best guess here is still a fair choice).
+key=$(awk -v r="vmlinuz-$release" '
+    $1 == "linux" && $2 ~ r"$" { print $2; exit }' "$cfg" 2>/dev/null)
+key="${key:-$fallback_key}"
+
+# GRUB's own cmdline for this release - the fallback when no override
+# exists, and what a new --set value is compared against for the
+# hid_google_hammer guard rail below.
+grub_cmdline=$(awk -v r="vmlinuz-$release" '
+    $1 == "linux" && $2 ~ r"$" {
+        out = ""
+        for (i = 3; i <= NF; i++) out = out (i > 3 ? " " : "") $i
+        print out
+        exit
+    }' "$cfg" 2>/dev/null)
+
+# Any existing override, matched by the stored key's own release suffix
+# (see cmdline_for() above - duplicated here rather than sourced, since this
+# heredoc is its own self-contained script, same as every other privileged
+# block in this file).
+existing=""
+if [ -f "$cmdfile" ]; then
+    existing=$(awk -F'\t' -v suf="vmlinuz-$release" '
+        /^[ \t]*#/ { next } /^[ \t]*$/ { next }
+        $1 ~ (suf "$") { val = ""; for (i = 2; i <= NF; i++) val = val (i > 2 ? "\t" : "") $i }
+        END { if (val != "") print val }
+    ' "$cmdfile")
+fi
+
+case "$action" in
+    show)
+        if [ -n "$existing" ]; then
+            echo "override (saved in $cmdfile):"
+            echo "  $existing"
+        else
+            echo "no override; GRUB's own entry is in effect:"
+            echo "  ${grub_cmdline:-<not found in grub.cfg yet>}"
+        fi
+        ;;
+    reset)
+        if [ ! -f "$cmdfile" ] || [ -z "$existing" ]; then
+            echo "no override was saved for $release; nothing to reset"
+            exit 0
+        fi
+        cp -a "$cmdfile" "$cmdfile.chromebook-fixer.bak"
+        awk -F'\t' -v suf="vmlinuz-$release" '
+            /^[ \t]*#/ { print; next } /^[ \t]*$/ { print; next }
+            $1 ~ (suf "$") { next }
+            { print }
+        ' "$cmdfile" > "$cmdfile.tmp"
+        mv "$cmdfile.tmp" "$cmdfile"
+        echo "cleared the override for $release; it falls back to GRUB's own entry:"
+        echo "  ${grub_cmdline:-<not found in grub.cfg yet>}"
+        ;;
+    set)
+        # module_blacklist=hid_google_hammer dropped from what is actually in
+        # effect right now (the override if one exists, else GRUB's own
+        # entry) - confirmed real on this hardware: generic 7.0.0-31 without
+        # kernel patch 9206 (the NULL-deref fix) goes dark without it.
+        old_cmdline="${existing:-$grub_cmdline}"
+        had_hammer=""
+        case "$old_cmdline" in *module_blacklist=*hid_google_hammer*) had_hammer=1 ;; esac
+        has_hammer=""
+        case "$value" in *module_blacklist=*hid_google_hammer*) has_hammer=1 ;; esac
+        if [ -n "$had_hammer" ] && [ -z "$has_hammer" ] && [ -z "$force" ]; then
+            echo "error: this drops module_blacklist=hid_google_hammer, which the cmdline" >&2
+            echo "actually in effect for $release right now carries. On a kernel without patch" >&2
+            echo "9206 (the NULL-deref fix) removing it leaves the panel dark - confirmed" >&2
+            echo "real on generic 7.0.0-31. Re-run with --force if this kernel definitely" >&2
+            echo "has that fix, or keep the blacklist in the new value." >&2
+            exit 3
+        fi
+        mkdir -p "$(dirname "$cmdfile")"
+        [ -f "$cmdfile" ] && cp -a "$cmdfile" "$cmdfile.chromebook-fixer.bak"
+        if [ -f "$cmdfile" ]; then
+            awk -F'\t' -v suf="vmlinuz-$release" '
+                /^[ \t]*#/ { print; next } /^[ \t]*$/ { print; next }
+                $1 ~ (suf "$") { next }
+                { print }
+            ' "$cmdfile" > "$cmdfile.tmp"
+        else
+            : > "$cmdfile.tmp"
+        fi
+        printf '%s\t%s\n' "$key" "$value" >> "$cmdfile.tmp"
+        mv "$cmdfile.tmp" "$cmdfile"
+        chmod 0644 "$cmdfile"
+        echo "saved override for $release ($key):"
+        echo "  $value"
+        echo "takes effect on the next boot through Nightfall."
+        ;;
+esac
+ROOT
+}
+
 cmd_remove() {
     local r="$1"
     case "$r" in */*|"") die "implausible kernel release: '$r'" ;; esac
@@ -227,14 +460,55 @@ cmd_remove() {
             # mismatch between disk and dpkg's database worse, not better.
             echo "  still owned by dpkg (removed, config-files remain): $(echo $rc_pkgs | tr '\n' ' ')"
             echo "  purging those instead of deleting by hand, so dpkg's own state clears too"
-            $SUDO bash -s -- $rc_pkgs <<'ROOT'
+            if $SUDO bash -s -- "$NF_CMDLINE_FILE" "$r" $rc_pkgs <<'ROOT'
 set -euo pipefail
+cmdfile="$1"; r="$2"; shift 2
 export DEBIAN_FRONTEND=noninteractive
 apt-get -y purge "$@"
+if [ -f "$cmdfile" ]; then
+    if awk -F'\t' -v suf="vmlinuz-$r" '
+        /^[ \t]*#/ { print; next } /^[ \t]*$/ { print; next }
+        $1 ~ (suf "$") { removed = 1; next }
+        { print }
+        END { exit (removed ? 0 : 1) }
+    ' "$cmdfile" > "$cmdfile.tmp"; then
+        cp -a "$cmdfile" "$cmdfile.chromebook-fixer.bak"
+        mv "$cmdfile.tmp" "$cmdfile"
+        echo "cleared the saved cmdline override for $r"
+    else
+        rm -f "$cmdfile.tmp"
+    fi
+fi
 ROOT
-            echo "purged." && return 0
+            then
+                echo "purged."
+                return 0
+            fi
+            return 1
         fi
-        $SUDO rm -rf "$MODULES/$r" && echo "removed." && return 0
+        if $SUDO bash -s -- "$MODULES/$r" "$NF_CMDLINE_FILE" "$r" <<'ROOT'
+set -euo pipefail
+modpath="$1"; cmdfile="$2"; r="$3"
+rm -rf "$modpath"
+if [ -f "$cmdfile" ]; then
+    if awk -F'\t' -v suf="vmlinuz-$r" '
+        /^[ \t]*#/ { print; next } /^[ \t]*$/ { print; next }
+        $1 ~ (suf "$") { removed = 1; next }
+        { print }
+        END { exit (removed ? 0 : 1) }
+    ' "$cmdfile" > "$cmdfile.tmp"; then
+        cp -a "$cmdfile" "$cmdfile.chromebook-fixer.bak"
+        mv "$cmdfile.tmp" "$cmdfile"
+        echo "cleared the saved cmdline override for $r"
+    else
+        rm -f "$cmdfile.tmp"
+    fi
+fi
+ROOT
+        then
+            echo "removed."
+            return 0
+        fi
         return 1
     fi
 
@@ -253,14 +527,28 @@ ROOT
         # Packaged: let apt do it, including the modules and headers packages,
         # and let its hooks run update-grub and update-initramfs.
         echo "  owned by: $(echo $pkgs | tr '\n' ' ')"
-        $SUDO bash -s -- "$NF_DEFAULT_FILE" "$path" $pkgs <<'ROOT'
+        $SUDO bash -s -- "$NF_DEFAULT_FILE" "$NF_CMDLINE_FILE" "$path" "$r" $pkgs <<'ROOT'
 set -euo pipefail
-marker="$1"; path="$2"; shift 2
+marker="$1"; cmdfile="$2"; path="$3"; r="$4"; shift 4
 export DEBIAN_FRONTEND=noninteractive
 apt-get -y remove --purge "$@"
 if [ -f "$marker" ] && [ "$(head -n1 "$marker")" = "$path" -o \
      "$(head -n1 "$marker" | sed 's|.*/vmlinuz-||')" = "${path##*/vmlinuz-}" ]; then
     rm -f "$marker" && echo "cleared Nightfall's saved default (it pointed here)"
+fi
+if [ -f "$cmdfile" ]; then
+    if awk -F'\t' -v suf="vmlinuz-$r" '
+        /^[ \t]*#/ { print; next } /^[ \t]*$/ { print; next }
+        $1 ~ (suf "$") { removed = 1; next }
+        { print }
+        END { exit (removed ? 0 : 1) }
+    ' "$cmdfile" > "$cmdfile.tmp"; then
+        cp -a "$cmdfile" "$cmdfile.chromebook-fixer.bak"
+        mv "$cmdfile.tmp" "$cmdfile"
+        echo "cleared the saved cmdline override for $r"
+    else
+        rm -f "$cmdfile.tmp"
+    fi
 fi
 sync
 ROOT
@@ -270,9 +558,9 @@ ROOT
     # Hand-installed: exactly what a kernel install puts down, mirroring
     # Nightfall's remove-kernel.sh, then update-grub so the menu follows.
     echo "  installed by hand, not owned by any package"
-    $SUDO bash -s -- "$BOOT" "$MODULES" "$r" "$NF_DEFAULT_FILE" "$path" <<'ROOT'
+    $SUDO bash -s -- "$BOOT" "$MODULES" "$r" "$NF_DEFAULT_FILE" "$path" "$NF_CMDLINE_FILE" <<'ROOT'
 set -euo pipefail
-boot="$1"; modules="$2"; r="$3"; marker="$4"; path="$5"
+boot="$1"; modules="$2"; r="$3"; marker="$4"; path="$5"; cmdfile="$6"
 # Prove update-grub is there BEFORE deleting anything: learned the hard way in
 # Nightfall, where a removal deleted the kernel and then failed at update-grub,
 # leaving the files gone and grub.cfg still listing them.
@@ -285,6 +573,20 @@ done
 if [ -f "$marker" ] && [ "$(head -n1 "$marker")" = "$path" -o \
      "$(head -n1 "$marker" | sed 's|.*/vmlinuz-||')" = "${path##*/vmlinuz-}" ]; then
     rm -f "$marker" && echo "  cleared Nightfall's saved default (it pointed here)"
+fi
+if [ -f "$cmdfile" ]; then
+    if awk -F'\t' -v suf="vmlinuz-$r" '
+        /^[ \t]*#/ { print; next } /^[ \t]*$/ { print; next }
+        $1 ~ (suf "$") { removed = 1; next }
+        { print }
+        END { exit (removed ? 0 : 1) }
+    ' "$cmdfile" > "$cmdfile.tmp"; then
+        cp -a "$cmdfile" "$cmdfile.chromebook-fixer.bak"
+        mv "$cmdfile.tmp" "$cmdfile"
+        echo "  cleared the saved cmdline override for $r"
+    else
+        rm -f "$cmdfile.tmp"
+    fi
 fi
 sync
 update-grub || {
@@ -446,10 +748,15 @@ case "${1:-list}" in
     list)    cmd_list "${2:-}" ;;
     remove)  cmd_remove "${2:?usage: $0 remove <release>}" ;;
     default) cmd_default "${2:?usage: $0 default <release>|--clear|--show}" ;;
+    cmdline) release="${2:?usage: $0 cmdline <release> [--show|--set <cmdline>|--reset] [--force]}"
+             shift 2 || true
+             cmd_cmdline "$release" "$@" ;;
     install) shift
              tarball="${1:?usage: $0 install <tarball> [--default]}"; shift || true
              set_default=""; [ "${1:-}" = --default ] && set_default=1
              cmd_install "$tarball" "$set_default" ;;
-    *) echo "usage: $0 {list [--tab]|remove <release>|default <release>|--clear|--show|install <tarball> [--default]}" >&2
+    *) echo "usage: $0 {list [--tab]|remove <release>|default <release>|--clear|--show|" \
+            "cmdline <release> [--show|--set <cmdline>|--reset] [--force]|" \
+            "install <tarball> [--default]}" >&2
        exit 2 ;;
 esac

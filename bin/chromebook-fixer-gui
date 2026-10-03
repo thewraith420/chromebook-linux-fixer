@@ -613,6 +613,11 @@ class Window(Adw.ApplicationWindow):
                                f"({package.replace(',', ', ')} still owns it)")
                 else:
                     subtitle = f"{human} · modules left behind, no kernel installed for them"
+            elif kind == "cmdline":
+                # release here is actually the stored key (a path), not a
+                # release string - lib/kernels.sh's orphan-cmdline row reuses
+                # the same 5 tab-separated columns everything else does.
+                subtitle = "saved command-line override with no matching kernel"
             else:
                 who = package or "installed by hand"
                 notes = []
@@ -627,19 +632,33 @@ class Window(Adw.ApplicationWindow):
                     subtitle += " · " + " · ".join(notes)
             row = Adw.ActionRow(title=release, subtitle=subtitle)
             row.set_subtitle_lines(0)
-            if kind == "modules":
+            if kind in ("modules", "cmdline"):
                 row.add_css_class("warning")
 
             box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
-            if kind == "kernel" and "default" not in flag_set:
-                pick = Gtk.Button(label="Set Default", valign=Gtk.Align.CENTER)
-                pick.set_tooltip_text("Make this the kernel Nightfall boots by default")
-                pick.connect("clicked", lambda _b, r=release: self._set_default_kernel(r))
-                box.append(pick)
+            if kind == "kernel":
+                if "default" not in flag_set:
+                    pick = Gtk.Button(label="Set Default", valign=Gtk.Align.CENTER)
+                    pick.set_tooltip_text("Make this the kernel Nightfall boots by default")
+                    pick.connect("clicked", lambda _b, r=release: self._set_default_kernel(r))
+                    box.append(pick)
+                edit = Gtk.Button(label="Cmdline…", valign=Gtk.Align.CENTER)
+                edit.set_tooltip_text("Edit the saved boot command line for this kernel")
+                edit.connect("clicked", lambda _b, r=release: self._edit_kernel_cmdline(r))
+                box.append(edit)
+                if "cmdline-override" in flag_set:
+                    reset = Gtk.Button(label="Reset Cmdline", valign=Gtk.Align.CENTER)
+                    reset.set_tooltip_text("Drop the saved override; fall back to GRUB's own entry")
+                    reset.connect("clicked", lambda _b, r=release: self._reset_kernel_cmdline(r))
+                    box.append(reset)
             # No Remove where it must not happen. A greyed-out button invites a
-            # click and explains nothing; the subtitle already says why.
+            # click and explains nothing; the subtitle already says why. An
+            # orphaned cmdline-override line (kind "cmdline") has no removal
+            # path of its own yet - lib/kernels.sh's cmd_cmdline only operates
+            # on a release that still has a real vmlinuz, so this is reported
+            # here, not offered as a one-click fix.
             removable = kind == "modules" or (
-                "running" not in flag_set and len(installed) > 1)
+                kind == "kernel" and "running" not in flag_set and len(installed) > 1)
             if removable:
                 rm = Gtk.Button(label="Remove", valign=Gtk.Align.CENTER)
                 rm.add_css_class("destructive-action")
@@ -657,6 +676,72 @@ class Window(Adw.ApplicationWindow):
         self._run_in_window(f"default kernel {release}",
                             [cli, "--no-colour", "kernels", "--default", release],
                             stream=False, refresh_after=True)
+
+    def _edit_kernel_cmdline(self, release):
+        """
+        Pre-fills the editor with the EFFECTIVE cmdline (saved override, or
+        GRUB's own entry when there is none), fetched off the GUI thread -
+        reading GRUB's own entry needs root (grub.cfg is 0600), so this goes
+        through askpass_env() the same way _scan_kernels does, rather than
+        blocking the GUI thread or guessing at a value to show.
+        """
+        cli = str(REPO / "bin" / "chromebook-fixer")
+
+        def fetch():
+            try:
+                out = subprocess.run(
+                    [cli, "--no-colour", "kernels", "--cmdline", release],
+                    capture_output=True, text=True, env=askpass_env(), timeout=30).stdout
+            except (OSError, subprocess.SubprocessError):
+                out = ""
+            # Both the saved-override and GRUB's-own-entry forms print the
+            # value on their own indented line, "  <cmdline>" - the line
+            # right after the explanatory first line in each case.
+            lines = [ln[2:] for ln in out.splitlines() if ln.startswith("  ")]
+            GLib.idle_add(self._show_cmdline_editor, release, lines[0] if lines else "")
+
+        import threading
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _show_cmdline_editor(self, release, current):
+        dialog = Adw.MessageDialog(
+            transient_for=self, modal=True,
+            heading=f"Edit command line — {release}",
+            body="Takes effect on the next boot through Nightfall. Saved to "
+                "/boot/nightfall-cmdline; GRUB's own menu is never touched.")
+        entry = Gtk.Entry(text=current, hexpand=True,
+                          margin_top=12, margin_bottom=6,
+                          margin_start=12, margin_end=12)
+        force = Gtk.CheckButton(
+            label="Save even if this drops module_blacklist=hid_google_hammer",
+            margin_start=12, margin_end=12, margin_bottom=6)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(entry)
+        box.append(force)
+        dialog.set_extra_child(box)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("go", "Save")
+        dialog.set_response_appearance("go", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("go")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r:
+                       self._set_kernel_cmdline(release, entry.get_text(), force.get_active())
+                       if r == "go" else None)
+        dialog.present()
+        return False
+
+    def _set_kernel_cmdline(self, release, value, force):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        argv = [cli, "--no-colour", "kernels", "--cmdline", release, "--set", value]
+        if force:
+            argv.append("--force")
+        self._run_in_window(f"cmdline {release}", argv, stream=True, refresh_after=True)
+
+    def _reset_kernel_cmdline(self, release):
+        cli = str(REPO / "bin" / "chromebook-fixer")
+        self._run_in_window(f"reset cmdline {release}",
+                            [cli, "--no-colour", "kernels", "--cmdline", release, "--reset"],
+                            stream=True, refresh_after=True)
 
     def _confirm_remove_kernel(self, release, human, kind, package):
         if kind == "modules":

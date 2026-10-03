@@ -135,6 +135,9 @@ chromebook-fixer kernels                                 # installed kernels, an
 chromebook-fixer kernels --install <tarball> [--set-default]  # install a BobZKernel portable-installer tarball
 chromebook-fixer kernels --default <release>              # make Nightfall boot this one first
 chromebook-fixer kernels --remove <release>                # asks for the release to be typed first
+chromebook-fixer kernels --cmdline <release>               # show the saved override, or GRUB's own entry if none
+chromebook-fixer kernels --cmdline <release> --set "..."   # save a per-kernel boot command line
+chromebook-fixer kernels --cmdline <release> --reset       # drop the override, fall back to GRUB's entry
 
 chromebook-fixer backups                                  # backups Nightfall has taken, on any mounted drive
 chromebook-fixer backups --delete <name>                   # asks for the name to be typed first
@@ -161,6 +164,18 @@ of those is safe to do from the running system, so the fixer does not attempt
 either. What it adds is the part that is otherwise a reboot into the touch UI
 just to check: seeing what is installed, freeing space, and changing settings
 that live as small files on `/boot`.
+
+**Per-kernel command-line overrides** — Nightfall's own `/boot/nightfall-cmdline`,
+previously editable only from its touch UI at boot — can now be read and
+written from here too, in the CLI (above) and from a **Cmdline…** button on
+each kernel row in the GUI. A missing override falls back to GRUB's own entry
+for that kernel, unchanged; setting one is refused if it is empty, has no
+`root=`, or drops `module_blacklist=hid_google_hammer` from what was actually
+in effect (confirmed real: a generic kernel without patch 9206 goes dark
+without that blacklist) unless `--force` says this kernel has that fix.
+Removing a kernel (either path, including a leftover module tree) prunes its
+line automatically; a line whose kernel is already gone shows up in `kernels`
+as an orphan, same as orphaned module trees.
 
 ---
 

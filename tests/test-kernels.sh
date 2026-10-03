@@ -306,5 +306,122 @@ says   "  and says how much it needed"   "need about" run_install install "$GOOD
 holds  "  nothing was written"           ! -e "$IBOOT/vmlinuz-9.9.9-test"
 rm -f "$FAKE_DF"
 
+# ==== per-kernel cmdline overrides (/boot/nightfall-cmdline) ================
+# Format confirmed with the nightfall-boot-manager session, 2026-10-02 -
+# these fixtures match their real source, not assumptions: a missing line is
+# no override (passes grub.cfg's own entry through untouched), the key must
+# be an exact match of grub.cfg's own "linux" directive column 2 (no path
+# reconstruction), comments/blank lines are skipped, the LAST matching line
+# wins on a duplicate, and an empty value after the tab is never an override.
+CMDFILE="$BOOT/nightfall-cmdline"
+cmdline() { NF_CMDLINE_FILE="$CMDFILE" "$K" cmdline "$@"; }
+
+reset_all
+says   "cmdline show: no override reads GRUB's own entry" "root=/dev/x" cmdline 7.2.3-BobZKernel
+expect "  and reports needing root for it" 0 cmdline 7.2.3-BobZKernel
+
+expect "cmdline set: refuses an empty value"        1 cmdline 7.2.3-BobZKernel --set ""
+says   "  and says why"                              "refusing to save an empty" cmdline 7.2.3-BobZKernel --set ""
+expect "cmdline set: refuses a value with no root="  1 cmdline 7.2.3-BobZKernel --set "quiet splash"
+says   "  and says why"                              "no root=" cmdline 7.2.3-BobZKernel --set "quiet splash"
+holds  "  neither refusal wrote anything"            ! -e "$CMDFILE"
+
+expect "cmdline set: a normal value succeeds"        0 cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet splash"
+holds  "  the key is exactly grub.cfg's own path, not reconstructed" \
+       "$(cut -f1 "$CMDFILE")" = "/boot/vmlinuz-7.2.3-BobZKernel"
+says   "cmdline show: the saved override, not GRUB's entry" "quiet splash" cmdline 7.2.3-BobZKernel
+lacks  "  and does not need root once saved (no 'needs root' note)" \
+       "needs root" cmdline 7.2.3-BobZKernel
+
+# re-setting must not stack a second line for the same kernel
+expect "cmdline set again: still just one line"      0 cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet nosplash"
+holds  "  exactly one line for this kernel"          "$(grep -c vmlinuz-7.2.3-BobZKernel "$CMDFILE")" = 1
+says   "  the newest value is in effect (last wins)" "nosplash" cmdline 7.2.3-BobZKernel
+
+expect "cmdline reset: clears it"                    0 cmdline 7.2.3-BobZKernel --reset
+says   "  falls back to GRUB's own entry again"       "root=/dev/x" cmdline 7.2.3-BobZKernel
+expect "cmdline reset again: no-op, not an error"     0 cmdline 7.2.3-BobZKernel --reset
+says   "  says there was nothing to reset"            "nothing to reset" cmdline 7.2.3-BobZKernel --reset
+
+# ---- the hid_google_hammer guard rail --------------------------------------
+reset_all
+printf 'menuentry x {\n\tlinux\t/boot/vmlinuz-7.2.3-BobZKernel root=/dev/x module_blacklist=hid_google_hammer\n}\n' > "$BOOT/grub/grub.cfg"
+expect "cmdline set: refuses dropping the hammer blacklist" 3 \
+       cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet"
+says   "  names the risk"                             "hid_google_hammer" cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet"
+says   "  and the escape hatch"                        "\-\-force" cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet"
+holds  "  nothing was written without --force"        ! -e "$CMDFILE"
+expect "cmdline set: --force overrides the refusal"   0 cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet" --force
+lacks  "  keeping the blacklist needs no --force"      "hid_google_hammer" \
+       bash -c "$K cmdline 7.2.3-BobZKernel --set 'root=/dev/x quiet module_blacklist=hid_google_hammer' 2>&1 1>/dev/null"
+
+# ---- format edge cases, read directly against a hand-written file ---------
+reset_all
+printf '# a comment line, and a blank line below\n\n/boot/vmlinuz-7.2.3-BobZKernel\tfirst value\n/boot/vmlinuz-7.2.3-BobZKernel\tlast value wins' > "$CMDFILE"
+says   "comments and blank lines are skipped, no crash" "last value wins" cmdline 7.2.3-BobZKernel
+says   "a file with no trailing newline still parses"   "last value wins" cmdline 7.2.3-BobZKernel
+printf '/boot/vmlinuz-7.2.3-BobZKernel\t\n' > "$CMDFILE"
+says   "an empty value after the tab is never an override" "root=/dev/x" cmdline 7.2.3-BobZKernel
+
+# ---- the separate-/boot key convention: no reconstruction, use grub.cfg's
+# own literal string verbatim, whatever shape it has -----------------------
+reset_all
+printf 'menuentry x {\n\tlinux\t/vmlinuz-7.2.3-BobZKernel root=/dev/x\n}\n' > "$BOOT/grub/grub.cfg"
+expect "cmdline set: picks up grub.cfg's own key shape" 0 cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet"
+holds  "  bare /vmlinuz-X, not /boot/vmlinuz-X - not reconstructed" \
+       "$(cut -f1 "$CMDFILE")" = "/vmlinuz-7.2.3-BobZKernel"
+
+# ---- orphans: a saved override for a kernel that is gone -------------------
+reset_all
+printf '/boot/vmlinuz-9.9.9-removed-long-ago\troot=/dev/old\n' > "$CMDFILE"
+says  "list flags an orphaned cmdline override"        "no matching kernel" "$K" list
+says  "  names the stale key"                           "9.9.9-removed-long-ago" "$K" list
+says  "tab output marks it orphan/cmdline"               "orphan	cmdline" "$K" list --tab
+# the no-/boot-prefix convention is also checked, under $BOOT
+printf '/vmlinuz-9.9.9-also-gone\troot=/dev/old\n' > "$CMDFILE"
+says  "  works for the no-/boot-prefix convention too"   "9.9.9-also-gone" "$K" list
+# a key that DOES resolve to a real file is not flagged - the test's own
+# $BOOT stands in for the real /boot (see cmdline_orphans' own comment on
+# why the check substitutes $BOOT rather than a literal "/boot" prefix)
+printf '%s\troot=/dev/x\n' "$BOOT/vmlinuz-7.2.3-BobZKernel" > "$CMDFILE"
+lacks "  a key matching a real kernel is not flagged"    "no matching kernel" "$K" list
+
+# the main listing flags which kernels carry a saved override
+reset_all
+printf '/boot/vmlinuz-7.2.3-BobZKernel\troot=/dev/x quiet\n' > "$CMDFILE"
+says  "list flags the kernel that has an override"       "cmdline-override" "$K" list
+holds "  tab output carries the flag too"                -n "$("$K" list --tab | grep 7.2.3-BobZKernel | grep cmdline-override)"
+
+# ---- removal prunes the matching line, every path --------------------------
+reset_all
+printf '/boot/vmlinuz-7.2.2-BobZKernel\troot=/dev/x\n' > "$CMDFILE"
+expect "remove (hand-installed) prunes its cmdline override" 0 "$K" remove 7.2.2-BobZKernel
+holds  "  the line is gone"                              ! -s "$CMDFILE"
+holds  "  a backup of the cmdline file was kept"          -f "$CMDFILE.chromebook-fixer.bak"
+
+reset_all
+printf '/boot/vmlinuz-7.0.0-31-generic\troot=/dev/x\n' > "$CMDFILE"
+expect "remove (packaged) prunes its cmdline override"   0 "$K" remove 7.0.0-31-generic
+holds  "  the line is gone"                              ! -s "$CMDFILE"
+
+reset_all
+printf '/boot/vmlinuz-7.0.0-27-generic\troot=/dev/x\n' > "$CMDFILE"
+expect "remove (leftover modules) prunes its cmdline override" 0 "$K" remove 7.0.0-27-generic
+holds  "  the line is gone"                              ! -s "$CMDFILE"
+
+reset_all
+mkdir -p "$MODS/7.0.0-31-rcleft-generic"
+printf '/boot/vmlinuz-7.0.0-31-rcleft-generic\troot=/dev/x\n' > "$CMDFILE"
+expect "remove (rc-state orphan, purged via apt) prunes its cmdline override" 0 "$K" remove 7.0.0-31-rcleft-generic
+holds  "  the line is gone"                              ! -s "$CMDFILE"
+
+# a release with NO saved override must not touch the file at all
+reset_all
+printf '/boot/vmlinuz-7.2.3-BobZKernel\troot=/dev/x\n' > "$CMDFILE"
+"$K" remove 7.2.2-BobZKernel >/dev/null 2>&1
+holds  "remove leaves an unrelated kernel's override untouched" \
+       "$(cat "$CMDFILE")" = "$(printf '/boot/vmlinuz-7.2.3-BobZKernel\troot=/dev/x')"
+
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
