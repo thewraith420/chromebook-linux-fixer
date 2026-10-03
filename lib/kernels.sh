@@ -140,25 +140,36 @@ rc_packages_for() {
         | grep -E '^linux-' || true
 }
 
-# Releases where dpkg still has rc-state linux-* packages but NEITHER a
-# vmlinuz NOR a /lib/modules directory exists any more - invisible to
+# Releases where dpkg still has an rc-state kernel image package but NEITHER
+# a vmlinuz NOR a /lib/modules directory exists any more - invisible to
 # orphan_modules() (which only looks under $MODULES, so a directory deleted
 # by hand after the kernel itself was removed hides the rc entries from
 # everything else here) and to a normal removal (nothing under $BOOT to even
 # find). Seen live, Slate session, 2026-10-02: /lib/modules/7.0.0-31-generic
 # gone, three rc packages for 7.0.0-31 still in dpkg.
 #
-# Package names are stripped of their recognised linux-* prefixes to recover
-# the release string; several packages (image, modules, headers, ...) share
-# one release, so the result is de-duplicated. Fuzzier than rc_packages_for()
-# (which is handed a release it already knows, not asked to recover one from
-# an arbitrary package name), but the prefix list covers Debian/Ubuntu's own
-# kernel package naming, which is what dpkg-query itself is scoped to here.
+# Scoped to linux-image[-unsigned]-<release> specifically, NOT every rc-state
+# linux-* package - a first version matched the broad set and stripped a
+# fixed list of known prefixes (image, headers, modules, ...) to recover the
+# release, which missed less common companion packages entirely (confirmed
+# on real hardware: linux-main-modules-zfs-7.0.0-27-generic matched no prefix
+# in the list, so the WHOLE package name was treated as if it were itself a
+# release and reported as a bogus, duplicate orphan). linux-image- is the one
+# reliable anchor: it is the package that actually DEFINES a kernel release
+# existing, companion packages (modules, modules-extra, headers, tools,
+# signatures-*, main-modules-zfs, and whatever else a given Ubuntu flavour
+# ships) never meaningfully exist without it, and once a release is found
+# this way, rc_packages_for(release) already sweeps up every companion
+# package for it by substring match - duplicating that sweep here per
+# companion package is exactly the bug. A release orphaned ONLY in its
+# companion packages, with linux-image- itself already purged, is missed by
+# this - accepted: under-reporting a rare case is far safer than offering a
+# bogus "release" someone could point `remove` at.
 rc_only_releases() {
     command -v dpkg-query >/dev/null 2>&1 || return 0
-    dpkg-query -W -f '${Package} ${Status}\n' 'linux-*' 2>/dev/null \
+    dpkg-query -W -f '${Package} ${Status}\n' 'linux-image-*' 2>/dev/null \
         | awk '$NF == "config-files" { print $1 }' \
-        | sed -E 's/^linux-(image|headers|modules-extra|modules|tools|cloud-tools|buildinfo)-//' \
+        | sed -E 's/^linux-image-(unsigned-)?//' \
         | sort -u \
         | while IFS= read -r r; do
             [ -n "$r" ] || continue
@@ -277,7 +288,7 @@ cmd_list() {
             printf '%s\t%s\t%s\torphan\tmodules\n' "$r" "$size" "${rc_pkgs//$'\n'/,}"
         elif [ -n "$rc_pkgs" ]; then
             printf '  %-38s %7s  removed but not purged by apt (%s still owns it)\n' \
-                   "$r" "$(human "$size")" "$(echo $rc_pkgs | tr '\n' ' ')"
+                   "$r" "$(human "$size")" "$(echo $rc_pkgs)"
         else
             printf '  %-38s %7s  modules with no kernel - leftovers, safe to remove\n' \
                    "$r" "$(human "$size")"
@@ -289,7 +300,7 @@ cmd_list() {
             printf '%s\t0\t%s\torphan\tmodules\n' "$r" "${rc_pkgs2//$'\n'/,}"
         else
             printf '  %-38s %7s  removed but not purged by apt, no files remain (%s still owns it)\n' \
-                   "$r" "" "$(echo $rc_pkgs2 | tr '\n' ' ')"
+                   "$r" "" "$(echo $rc_pkgs2)"
         fi
     done
     local key

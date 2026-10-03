@@ -33,11 +33,15 @@ case "$rel" in
     # remove` without --purge leaves behind. Modelled on a real one: Software
     # Updater left linux-modules-7.0.0-31-generic exactly like this.
     *rcleft*) printf 'linux-image-%s deinstall ok config-files\nlinux-modules-%s deinstall ok config-files\n' "$rel" "$rel" ;;
-    # The broad 'linux-*' listing rc_only_releases() itself makes - pattern
-    # strips to exactly "linux-". A release with NO files anywhere left (rc
-    # state only), plus an ordinary installed one as a red herring to prove
-    # currently-installed kernels are not flagged by this path.
-    linux-) [ -n "${DPKGONLY_FIXTURE:-}" ] && printf 'linux-image-7.0.0-99-dpkgonly-generic deinstall ok config-files\nlinux-modules-7.0.0-99-dpkgonly-generic deinstall ok config-files\nlinux-image-7.0.0-31-generic install ok installed\n'; true ;;
+    # The narrow linux-image-* listing rc_only_releases() itself makes -
+    # pattern strips to exactly "linux-image-". A release with no files
+    # anywhere left (rc state only), one with real companion packages (see
+    # the zfs case below), and an ordinary installed one as a red herring -
+    # none of the companion packages themselves appear here, deliberately,
+    # even for releases that have them below: they must never surface as
+    # their own release.
+    linux-image-) [ -n "${DPKGONLY_FIXTURE:-}" ] && printf 'linux-image-7.0.0-99-dpkgonly-generic deinstall ok config-files\nlinux-image-7.0.0-28-zfs-generic deinstall ok config-files\nlinux-image-7.0.0-31-generic install ok installed\n'; true ;;
+    *7.0.0-28-zfs-generic*) printf 'linux-image-7.0.0-28-zfs-generic deinstall ok config-files\nlinux-modules-7.0.0-28-zfs-generic deinstall ok config-files\nlinux-main-modules-zfs-7.0.0-28-zfs-generic deinstall ok config-files\n' ;;
     # The SAME release, now queried individually by rc_packages_for() (as
     # cmd_list/cmd_remove do once rc_only_releases() has named it) - must
     # still read as rc state here too, ahead of the generic *generic* case
@@ -471,6 +475,32 @@ says   "  purges exactly its own rc-state packages" \
 expect "a release with genuinely nothing (no files, no dpkg entry) still refuses" 1 \
        "$K" remove 9.9.9-nothing-at-all-generic
 says   "  and says why"  "nothing removed" "$K" remove 9.9.9-nothing-at-all-generic
+
+# ---- a companion package (e.g. ZFS modules) must never surface as its own
+# bogus "release" - real bug, Slate session 2026-10-02:
+# linux-main-modules-zfs-7.0.0-27-generic matched no prefix in an earlier,
+# fixed-prefix-list version of rc_only_releases() and was reported (and
+# purgeable) as if it were itself a kernel release, duplicating what its
+# real release's row already correctly swept up. -----------------------------
+says  "a zfs companion package does not appear as its own release row" \
+      "7.0.0-28-zfs-generic" "$K" list
+holds "  exactly one row for the real release, not one per companion package" \
+      "$("$K" list --tab | grep -c 7.0.0-28-zfs-generic)" = 1
+holds "  the companion package name itself is never column 1 (its own 'release')" \
+      "$("$K" list --tab | cut -f1 | grep -c '^linux-main-modules-zfs-')" = 0
+says  "  the real release's row lists every companion package, zfs included" \
+      "linux-main-modules-zfs-7.0.0-28-zfs-generic" "$K" list
+lacks "  no double space before 'still owns it' (plain echo, not tr)" \
+      "  still owns it" "$K" list
+expect "remove on the real release purges every companion package together" 0 \
+       "$K" remove 7.0.0-28-zfs-generic
+: > "$APT_LOG"
+"$K" remove 7.0.0-28-zfs-generic >/dev/null 2>&1
+holds "  exactly one purge call, not one per package"  "$(grep -c '^apt-get -y purge' "$APT_LOG")" = 1
+says  "  the zfs package is purged alongside the rest, in one call" \
+      "linux-main-modules-zfs-7.0.0-28-zfs-generic" cat "$APT_LOG"
+says  "  the image package too"                        "linux-image-7.0.0-28-zfs-generic" cat "$APT_LOG"
+says  "  and the plain modules package"                 "linux-modules-7.0.0-28-zfs-generic" cat "$APT_LOG"
 unset DPKGONLY_FIXTURE
 
 echo "$pass passed, $fail failed"
