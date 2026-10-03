@@ -128,6 +128,14 @@ if [ -z "$INSTALLER" ]; then
     exit 1
 fi
 echo "picker source: $REPO"
+# What commit this build is about to come from, recorded at install time so
+# updates.sh can tell an installed build apart from a checkout that has since
+# moved - including purely local commits that were never "behind" any remote.
+# Real incident, 2026-10-03: commits landed in this checkout and sat unpushed
+# for a day; the updater's own checkout-vs-origin check read "up to date" the
+# whole time, while the installed build was actually over a week stale. Empty
+# when $REPO is not a git checkout (nothing to record, nothing compared later).
+SRC_SHA=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)
 
 # The picker kernel used to be the one thing this could not produce - building
 # one is not something this tool does, and a 1.3GHz tablet is not where you
@@ -431,15 +439,18 @@ ENVARGS=()
 # differs: a reinstall of the same kernel (a rebuilt initramfs) must not
 # overwrite a good rollback pair with a copy of what is already there, and the
 # two files are kept as a matched pair, never one from each generation.
-$SUDO ${ENVARGS[@]+env "${ENVARGS[@]}"} bash -s -- "$INSTALLER" "$KERNEL" "$IMG" "${NF_BOOT_DIR:-/boot/nightfall}" <<'ROOT'
+$SUDO ${ENVARGS[@]+env "${ENVARGS[@]}"} bash -s -- "$INSTALLER" "$KERNEL" "$IMG" "${NF_BOOT_DIR:-/boot/nightfall}" "$SRC_SHA" <<'ROOT'
 set -e
-INSTALLER="$1"; KERNEL="$2"; IMG="$3"; D="$4"
+INSTALLER="$1"; KERNEL="$2"; IMG="$3"; D="$4"; SHA="$5"
 if [ -f "$D/vmlinuz" ] && ! cmp -s "$KERNEL" "$D/vmlinuz"; then
     cp -p "$D/vmlinuz" "$D/vmlinuz.previous"
     [ -f "$D/initramfs.img" ] && cp -p "$D/initramfs.img" "$D/initramfs.img.previous"
     echo "kept the replaced kernel as $D/vmlinuz.previous"
 fi
-exec "$INSTALLER" "$KERNEL" "$IMG"
+"$INSTALLER" "$KERNEL" "$IMG"
+# Not exec'd above: this write has to happen after the installer, which
+# needs the shell to still be alive once it returns. See lib/updates.sh.
+[ -n "$SHA" ] && echo "$SHA" > "$D/source-sha"
 ROOT
 
 echo

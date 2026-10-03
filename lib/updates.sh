@@ -110,9 +110,39 @@ check_fixer() {
 }
 
 check_nightfall_source() {
-    local src
+    local src installed_sha built_sha
     src=$(find_nightfall_source) || { row nightfall-source na "" "" "no checkout on this machine"; return; }
     git_state "$src"
+
+    # git_state only answers "is there anything to pull" - it compares the
+    # checkout against ITS OWN remote, which says nothing about whether the
+    # INSTALLED build reflects this checkout. The two diverge whenever
+    # commits land locally before being pushed (real collision history: both
+    # machines commit straight to this repo, see CLAUDE.md) - that gap read
+    # as "up to date" for a day while the installed build was actually over a
+    # week stale (2026-10-03). fixes/nightfall/apply.sh now records the
+    # checkout HEAD it built from at $NF_BOOT_DIR/source-sha; compare the
+    # checkout's current HEAD against that, and let a mismatch win over
+    # "current" - a build that lags this checkout needs `update nightfall`
+    # regardless of what origin says. Only when there is actually something
+    # installed to compare against, and only on top of "current": "behind" /
+    # "blocked" already mean a pull (and therefore a rebuild) is needed.
+    if [ -e "$NF_BOOT_DIR/vmlinuz" ] && [ "$G_STATE" = current ]; then
+        installed_sha=$(git -C "$src" rev-parse HEAD 2>/dev/null || true)
+        built_sha=$(cat "$NF_BOOT_DIR/source-sha" 2>/dev/null || true)
+        if [ -z "$built_sha" ]; then
+            G_STATE=behind
+            G_INSTALLED="(unrecorded)"
+            G_AVAILABLE="${installed_sha:0:7}"
+            G_DETAIL="installed build predates source-sha tracking - rebuild to get accurate checks going forward"
+        elif [ -n "$installed_sha" ] && [ "$built_sha" != "$installed_sha" ]; then
+            G_STATE=behind
+            G_INSTALLED="${built_sha:0:7}"
+            G_AVAILABLE="${installed_sha:0:7}"
+            G_DETAIL="installed build predates the checkout - run 'update nightfall' to rebuild"
+        fi
+    fi
+
     row nightfall-source "$G_STATE" "$G_INSTALLED" "$G_AVAILABLE" "$G_DETAIL"
 }
 

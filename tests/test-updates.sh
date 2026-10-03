@@ -107,6 +107,37 @@ holds "a found checkout that is behind is reported" "$(cut -f2 <<<"$row")" = beh
 env HOME="$NF_HOME" FIXER_ROOT="$FX" "$U" pull nightfall-source >/dev/null 2>&1
 holds "  and pull moves it"                         "$(cat "$NF_HOME/nightfall-boot-manager/f.txt")" = v4
 
+# ---- installed-build staleness: checkout-vs-origin is not enough --------
+# Real gap, fixed 2026-10-03: a checkout reads "current" against its own
+# remote even when commits landed locally before being pushed - exactly what
+# happened on the build PC, where the installed Nightfall was over a week
+# stale while `check` kept saying there was nothing to pull. apply.sh now
+# records the checkout HEAD it built from at $NF_BOOT_DIR/source-sha; this
+# must be compared against the checkout's CURRENT head, not against origin.
+NF2_HOME="$T/nfhome2"; mkdir -p "$NF2_HOME"
+$GIT clone -q "$ORIGIN" "$NF2_HOME/nightfall-boot-manager" 2>/dev/null
+NF2_BOOT="$T/nfboot2"; mkdir -p "$NF2_BOOT"; echo bytes > "$NF2_BOOT/vmlinuz"
+nf2run() { env HOME="$NF2_HOME" FIXER_ROOT="$FX" NF_BOOT_DIR="$NF2_BOOT" NF_KERNEL_API="file://$T/none" "$U" "$@"; }
+HEAD_NOW=$($GIT -C "$NF2_HOME/nightfall-boot-manager" rev-parse HEAD)
+
+row=$(nf2run check --porcelain nightfall-source 2>&1)
+holds "current checkout, no source-sha marker yet: flagged, not silently current" \
+      "$(cut -f2 <<<"$row")" = behind
+says  "  and says why"                              "predates source-sha tracking" nf2run check nightfall-source
+
+echo "$HEAD_NOW" > "$NF2_BOOT/source-sha"
+row=$(nf2run check --porcelain nightfall-source 2>&1)
+holds "marker matching current HEAD: genuinely current, no false positive" \
+      "$(cut -f2 <<<"$row")" = current
+
+$GIT -C "$NF2_HOME/nightfall-boot-manager" commit --allow-empty -qm local-only
+holds "  (control: upstream still says nothing to pull - the exact trap)" \
+      "$($GIT -C "$NF2_HOME/nightfall-boot-manager" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)" = 0
+row=$(nf2run check --porcelain nightfall-source 2>&1)
+holds "checkout moved past the recorded build: behind, even with nothing to pull" \
+      "$(cut -f2 <<<"$row")" = behind
+says  "  and points at a rebuild, not a pull"       "run 'update nightfall'" nf2run check nightfall-source
+
 # ---- the kernel comparison ----------------------------------------------
 STUB="$T/stub"; mkdir -p "$STUB" "$T/boot"
 echo bytes > "$T/boot/vmlinuz"

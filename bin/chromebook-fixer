@@ -536,7 +536,11 @@ def _update_nightfall(script, fixes, c, assume_yes):
     if kernel_behind:
         print(f"  kernel   {ker[2]} -> {ker[3]}")
     if source_behind:
-        print(f"  source   {src[2]} -> {src[3]}  (pulled, then rebuilt)")
+        # Not always an actual pull: a checkout can already have the commits
+        # locally (unpushed) while the installed build still predates them -
+        # the real gap this detection exists for. `pull nightfall-source`
+        # below is a safe no-op in that case; only the rebuild is guaranteed.
+        print(f"  source   {src[2]} -> {src[3]}  (rebuilt from the checkout)")
     print("  The kernel being replaced is kept as /boot/nightfall/vmlinuz.previous.")
     print("  Your other boot entries are not touched.")
     if not assume_yes:
