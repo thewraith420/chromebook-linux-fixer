@@ -168,14 +168,16 @@ that live as small files on `/boot`.
 **Per-kernel command-line overrides** — Nightfall's own `/boot/nightfall-cmdline`,
 previously editable only from its touch UI at boot — can now be read and
 written from here too, in the CLI (above) and from a **Cmdline…** button on
-each kernel row in the GUI. A missing override falls back to GRUB's own entry
-for that kernel, unchanged; setting one is refused if it is empty, has no
-`root=`, or drops `module_blacklist=hid_google_hammer` from what was actually
-in effect (confirmed real: a generic kernel without patch 9206 goes dark
-without that blacklist) unless `--force` says this kernel has that fix.
-Removing a kernel (either path, including a leftover module tree) prunes its
-line automatically; a line whose kernel is already gone shows up in `kernels`
-as an orphan, same as orphaned module trees.
+each kernel row in the GUI, which opens a wrapping multi-line field (a real
+cmdline is long enough that a single-line entry just scrolls) with **Cancel**,
+**Clear Saved** (back to GRUB's own entry; shown only when an override is
+saved) and **Save**. A missing override falls back to GRUB's own entry for
+that kernel, unchanged; setting one is refused if it is empty, has no `root=`,
+or contains a literal tab. Removing a kernel (every path, including a
+leftover module tree or a kernel already gone from both `/boot` and dpkg)
+prunes its line automatically; a line whose kernel is already gone shows up in
+`kernels` as its own orphan row, with a Remove button of its own, same as
+orphaned module trees.
 
 ---
 

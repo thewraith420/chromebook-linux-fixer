@@ -6,7 +6,7 @@
 #   kernels.sh remove <release>
 #   kernels.sh default <release>|--clear|--show
 #   kernels.sh install <tarball> [--default]
-#   kernels.sh cmdline <release> [--show|--set <full cmdline>|--reset] [--force]
+#   kernels.sh cmdline <release> [--show|--set <full cmdline>|--reset]
 #
 # Yes, this is userspace work: a kernel is /boot/vmlinuz-<release>, its
 # initrd, its /lib/modules tree and a GRUB entry. The care is in WHICH one and
@@ -354,9 +354,8 @@ ROOT
 cmd_cmdline() {
     local release="$1"; shift
     case "$release" in */*|"") die "implausible kernel release: '$release'" ;; esac
-    [ -f "$BOOT/vmlinuz-$release" ] || die "no $BOOT/vmlinuz-$release - run '$0 list' to see what is installed"
 
-    local action=show value="" force=""
+    local action=show value=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --show)   action=show ;;
@@ -364,11 +363,20 @@ cmd_cmdline() {
                       [ $# -ge 2 ] || die "usage: $0 cmdline <release> --set <full cmdline>"
                       value="$2"; shift ;;
             --reset)  action=reset ;;
-            --force)  force=1 ;;
-            *) die "usage: $0 cmdline <release> [--show|--set <cmdline>|--reset] [--force]" ;;
+            *) die "usage: $0 cmdline <release> [--show|--set <cmdline>|--reset]" ;;
         esac
         shift
     done
+
+    # --reset only ever drops whatever is saved, which needs no real kernel
+    # behind it - this doubles as the direct way to prune a cmdline-only
+    # orphan (the kernel already gone, but its line survives in
+    # /boot/nightfall-cmdline), the same case `kernels remove <release>`
+    # handles on its own release-removal path. --show and --set are about a
+    # specific kernel's boot line and keep requiring one to exist.
+    if [ "$action" != reset ]; then
+        [ -f "$BOOT/vmlinuz-$release" ] || die "no $BOOT/vmlinuz-$release - run '$0 list' to see what is installed"
+    fi
 
     if [ "$action" = set ]; then
         [ -n "$value" ] || die "refusing to save an empty cmdline"
@@ -390,9 +398,9 @@ cmd_cmdline() {
     fi
 
     $SUDO bash -s -- "$release" "$NF_CMDLINE_FILE" "$GRUB_CFG" "$(grub_path "$release")" \
-                      "$action" "$value" "$force" <<'ROOT'
+                      "$action" "$value" <<'ROOT'
 set -euo pipefail
-release="$1"; cmdfile="$2"; cfg="$3"; fallback_key="$4"; action="$5"; value="$6"; force="$7"
+release="$1"; cmdfile="$2"; cfg="$3"; fallback_key="$4"; action="$5"; value="$6"
 
 # The exact grub.cfg key for this release - NOT reconstructed, see the
 # CMDLINE note at the top of this script. Falls back to the computed guess
@@ -403,9 +411,7 @@ key=$(awk -v r="vmlinuz-$release" '
     $1 == "linux" && $2 ~ r"$" { print $2; exit }' "$cfg" 2>/dev/null)
 key="${key:-$fallback_key}"
 
-# GRUB's own cmdline for this release - the fallback when no override
-# exists, and what a new --set value is compared against for the
-# hid_google_hammer guard rail below.
+# GRUB's own cmdline for this release - the fallback when no override exists.
 grub_cmdline=$(awk -v r="vmlinuz-$release" '
     $1 == "linux" && $2 ~ r"$" {
         out = ""
@@ -453,23 +459,11 @@ case "$action" in
         echo "  ${grub_cmdline:-<not found in grub.cfg yet>}"
         ;;
     set)
-        # module_blacklist=hid_google_hammer dropped from what is actually in
-        # effect right now (the override if one exists, else GRUB's own
-        # entry) - confirmed real on this hardware: generic 7.0.0-31 without
-        # kernel patch 9206 (the NULL-deref fix) goes dark without it.
-        old_cmdline="${existing:-$grub_cmdline}"
-        had_hammer=""
-        case "$old_cmdline" in *module_blacklist=*hid_google_hammer*) had_hammer=1 ;; esac
-        has_hammer=""
-        case "$value" in *module_blacklist=*hid_google_hammer*) has_hammer=1 ;; esac
-        if [ -n "$had_hammer" ] && [ -z "$has_hammer" ] && [ -z "$force" ]; then
-            echo "error: this drops module_blacklist=hid_google_hammer, which the cmdline" >&2
-            echo "actually in effect for $release right now carries. On a kernel without patch" >&2
-            echo "9206 (the NULL-deref fix) removing it leaves the panel dark - confirmed" >&2
-            echo "real on generic 7.0.0-31. Re-run with --force if this kernel definitely" >&2
-            echo "has that fix, or keep the blacklist in the new value." >&2
-            exit 3
-        fi
+        # No guard here against dropping module_blacklist=hid_google_hammer -
+        # deliberately removed (Bob, 2026-10-02): the override only affects
+        # boots through Nightfall, and GRUB's own entries still boot generic
+        # with the blacklist regardless, so a bad value here is recoverable
+        # without needing a confirmation step in the way.
         mkdir -p "$(dirname "$cmdfile")"
         [ -f "$cmdfile" ] && cp -a "$cmdfile" "$cmdfile.chromebook-fixer.bak"
         if [ -f "$cmdfile" ]; then
@@ -500,12 +494,44 @@ cmd_remove() {
     # because nothing boots it.
     if [ ! -f "$BOOT/vmlinuz-$r" ]; then
         local rc_pkgs; rc_pkgs=$(rc_packages_for "$r")
-        # A release can be dpkg-owned (rc state) with NO files left at all -
-        # the modules directory deleted by hand after the kernel itself was
-        # already gone, seen live (Slate session, 2026-10-02). Accept that
-        # as a valid target too, not just "the directory still exists".
-        [ -d "$MODULES/$r" ] || [ -n "$rc_pkgs" ] || \
-            die "no kernel or modules for '$r' - nothing removed"
+        if [ ! -d "$MODULES/$r" ] && [ -z "$rc_pkgs" ]; then
+            # Nothing on disk and dpkg has never heard of this release
+            # either - the only thing that can still be removed, if
+            # anything, is a saved cmdline override with no kernel behind it
+            # any more (seen live, Slate session, 2026-10-02: Bob could
+            # neither `remove` nor `cmdline --reset` a dangling override,
+            # since both died on "no vmlinuz" before ever reaching the
+            # file). No boot guard beyond the running-kernel check applies -
+            # this prunes one line, nothing else.
+            local cmdline_val; cmdline_val=$(cmdline_for "$r")
+            [ -n "$cmdline_val" ] || \
+                die "no kernel, modules, dpkg entry or saved cmdline override for '$r' - nothing removed"
+            [ "$r" = "$RUNNING" ] && die "refusing to touch the running kernel's modules ($r)"
+            echo "no kernel, modules or dpkg entry for $r - removing its saved cmdline override only"
+            if $SUDO bash -s -- "$NF_CMDLINE_FILE" "$r" <<'ROOT'
+set -euo pipefail
+cmdfile="$1"; r="$2"
+if [ -f "$cmdfile" ]; then
+    if awk -F'\t' -v suf="vmlinuz-$r" '
+        /^[ \t]*#/ { print; next } /^[ \t]*$/ { print; next }
+        $1 ~ (suf "$") { removed = 1; next }
+        { print }
+        END { exit (removed ? 0 : 1) }
+    ' "$cmdfile" > "$cmdfile.tmp"; then
+        cp -a "$cmdfile" "$cmdfile.chromebook-fixer.bak"
+        mv "$cmdfile.tmp" "$cmdfile"
+        echo "cleared the saved cmdline override for $r"
+        exit 0
+    fi
+    rm -f "$cmdfile.tmp"
+fi
+exit 1
+ROOT
+            then
+                return 0
+            fi
+            return 1
+        fi
         [ "$r" = "$RUNNING" ] && die "refusing to touch the running kernel's modules ($r)"
         if [ -d "$MODULES/$r" ]; then
             local size; size=$(du -sb "$MODULES/$r" 2>/dev/null | cut -f1 || echo 0)
@@ -809,7 +835,7 @@ case "${1:-list}" in
     list)    cmd_list "${2:-}" ;;
     remove)  cmd_remove "${2:?usage: $0 remove <release>}" ;;
     default) cmd_default "${2:?usage: $0 default <release>|--clear|--show}" ;;
-    cmdline) release="${2:?usage: $0 cmdline <release> [--show|--set <cmdline>|--reset] [--force]}"
+    cmdline) release="${2:?usage: $0 cmdline <release> [--show|--set <cmdline>|--reset]}"
              shift 2 || true
              cmd_cmdline "$release" "$@" ;;
     install) shift
@@ -817,7 +843,7 @@ case "${1:-list}" in
              set_default=""; [ "${1:-}" = --default ] && set_default=1
              cmd_install "$tarball" "$set_default" ;;
     *) echo "usage: $0 {list [--tab]|remove <release>|default <release>|--clear|--show|" \
-            "cmdline <release> [--show|--set <cmdline>|--reset] [--force]|" \
+            "cmdline <release> [--show|--set <cmdline>|--reset]|" \
             "install <tarball> [--default]}" >&2
        exit 2 ;;
 esac

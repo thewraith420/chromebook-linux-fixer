@@ -357,17 +357,19 @@ says   "  falls back to GRUB's own entry again"       "root=/dev/x" cmdline 7.2.
 expect "cmdline reset again: no-op, not an error"     0 cmdline 7.2.3-BobZKernel --reset
 says   "  says there was nothing to reset"            "nothing to reset" cmdline 7.2.3-BobZKernel --reset
 
-# ---- the hid_google_hammer guard rail --------------------------------------
+# ---- no hid_google_hammer guard: deliberately removed (Bob, 2026-10-02) -
+# the override only affects boots through Nightfall, and GRUB's own entries
+# still boot generic with the blacklist regardless, so dropping it here is
+# recoverable without a confirmation step in the way. Only the hard refusals
+# (empty, no root=, a literal tab - tested elsewhere) still apply. ----------
 reset_all
 printf 'menuentry x {\n\tlinux\t/boot/vmlinuz-7.2.3-BobZKernel root=/dev/x module_blacklist=hid_google_hammer\n}\n' > "$BOOT/grub/grub.cfg"
-expect "cmdline set: refuses dropping the hammer blacklist" 3 \
+expect "cmdline set: dropping the hammer blacklist is allowed, no guard" 0 \
        cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet"
-says   "  names the risk"                             "hid_google_hammer" cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet"
-says   "  and the escape hatch"                        "\-\-force" cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet"
-holds  "  nothing was written without --force"        ! -e "$CMDFILE"
-expect "cmdline set: --force overrides the refusal"   0 cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet" --force
-lacks  "  keeping the blacklist needs no --force"      "hid_google_hammer" \
-       bash -c "$K cmdline 7.2.3-BobZKernel --set 'root=/dev/x quiet module_blacklist=hid_google_hammer' 2>&1 1>/dev/null"
+holds  "  and it was actually saved"                  "$(cat "$CMDFILE")" = \
+       "$(printf '/boot/vmlinuz-7.2.3-BobZKernel\troot=/dev/x quiet')"
+expect "--force is gone entirely - an unrecognised flag, not a silent no-op" 1 \
+       cmdline 7.2.3-BobZKernel --set "root=/dev/x quiet" --force
 
 # ---- format edge cases, read directly against a hand-written file ---------
 reset_all
@@ -502,6 +504,38 @@ says  "  the zfs package is purged alongside the rest, in one call" \
 says  "  the image package too"                        "linux-image-7.0.0-28-zfs-generic" cat "$APT_LOG"
 says  "  and the plain modules package"                 "linux-modules-7.0.0-28-zfs-generic" cat "$APT_LOG"
 unset DPKGONLY_FIXTURE
+
+# ---- pruning a cmdline-only orphan: no kernel, no modules, no dpkg entry,
+# just a dangling line in nightfall-cmdline. Real case, Slate session
+# 2026-10-02: Bob could neither `remove` nor `cmdline --reset` a line like
+# this - both died on "no vmlinuz" before ever reaching the file. ----------
+reset_all
+printf '/boot/vmlinuz-9.9.9-dangling-generic\troot=/dev/old\n' > "$CMDFILE"
+
+expect "cmdline --reset works on a release with no vmlinuz at all" 0 \
+       cmdline 9.9.9-dangling-generic --reset
+holds  "  the line is gone"                              ! -s "$CMDFILE"
+holds  "  a backup was kept"                              -f "$CMDFILE.chromebook-fixer.bak"
+
+printf '/boot/vmlinuz-9.9.9-dangling-generic\troot=/dev/old\n' > "$CMDFILE"
+expect "cmdline --show on a release with no vmlinuz still refuses" 1 \
+       cmdline 9.9.9-dangling-generic
+expect "cmdline --set on a release with no vmlinuz still refuses" 1 \
+       cmdline 9.9.9-dangling-generic --set "root=/dev/x"
+holds  "  neither touched the override"                   "$(cat "$CMDFILE")" = \
+       "$(printf '/boot/vmlinuz-9.9.9-dangling-generic\troot=/dev/old')"
+
+expect "kernels remove also prunes a cmdline-only orphan" 0 \
+       "$K" remove 9.9.9-dangling-generic
+holds  "  the line is gone"                               ! -s "$CMDFILE"
+says   "  says only the override was removed, not files"  "cmdline override only" \
+       bash -c 'printf "/boot/vmlinuz-9.9.9-dangling-generic\troot=/dev/old\n" > "'"$CMDFILE"'"; "'"$K"'" remove 9.9.9-dangling-generic'
+
+reset_all
+expect "a release with genuinely nothing anywhere still refuses via remove" 1 \
+       "$K" remove 9.9.9-truly-nothing
+says   "  and names everything it looked for"             "dpkg entry or saved cmdline" \
+       "$K" remove 9.9.9-truly-nothing
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

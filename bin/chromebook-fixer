@@ -337,8 +337,6 @@ def cmd_kernels(args, c):
             argv += ["--set", args.set]
         elif args.reset:
             argv.append("--reset")
-        if args.force:
-            argv.append("--force")
         sys.stdout.flush()
         return subprocess.call(argv, env=env)
     if args.install:
@@ -365,18 +363,34 @@ def cmd_kernels(args, c):
     match = None
     for line in found.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) >= 5 and parts[0] == args.remove:
-            match = parts
+        if len(parts) < 5:
+            continue
+        col1, size, pkg, flags, kind = parts[:5]
+        # A cmdline-only orphan's column 1 is the stored key (a path), not a
+        # release string - lib/kernels.sh always wants the bare release,
+        # matched by its own vmlinuz-<release> suffix regardless of path
+        # convention (see cmd_remove). Derive it here too, the same way the
+        # GUI does, so `--remove <release>` finds and can remove it.
+        candidate = col1.split("vmlinuz-", 1)[-1] if kind == "cmdline" else col1
+        if candidate == args.remove:
+            match = [candidate, size, pkg, flags, kind]
             break
     if match is None:
-        print(c(f"no kernel or leftover modules called {args.remove!r}", RED))
+        print(c(f"no kernel, leftover modules or saved cmdline override called "
+                f"{args.remove!r}", RED))
         print("Run without --remove to see what is installed.")
         return 1
 
     release, size, pkg, flags, kind = match[:5]
-    human = f"{int(size) / 1e9:.1f}GB" if int(size) >= 1e9 else f"{int(size) / 1e6:.0f}MB"
-    print(f"{c(release, BOLD)}  {human}")
-    if kind == "modules":
+    # A cmdline-only orphan's size column is empty - nothing on disk to
+    # measure, unlike every other row, which always carries a real byte
+    # count. int(size) crashed on this before it was ever reachable here.
+    human = (f"{int(size) / 1e9:.1f}GB" if size.isdigit() and int(size) >= 1e9
+             else f"{int(size) / 1e6:.0f}MB" if size.isdigit() else "")
+    print(f"{c(release, BOLD)}" + (f"  {human}" if human else ""))
+    if kind == "cmdline":
+        print("  saved command-line override with no kernel for it any more")
+    elif kind == "modules":
         print("  leftover modules; no kernel is installed for them")
     else:
         print(f"  {pkg or 'installed by hand, not owned by any package'}")
@@ -734,9 +748,6 @@ def main():
                     help="with --cmdline: save this as the override")
     pk.add_argument("--reset", action="store_true",
                     help="with --cmdline: drop the saved override")
-    pk.add_argument("--force", action="store_true",
-                    help="with --cmdline --set: save even if it drops "
-                         "module_blacklist=hid_google_hammer")
     pk.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation")
 
