@@ -43,3 +43,5 @@ jobs:
         run: ./tests/test-audio-avs-dsp-cmdline.sh
       - name: Waydroid LXC hook (post-stop fix + proc/cmdline containment)
         run: ./tests/test-waydroid-lxc-hook.sh
+      - name: Machine Specs display (friendly model name, matching unaffected)
+        run: ./tests/test-registry.py

@@ -68,6 +68,10 @@ class Machine:
     bios_vendor: str
     bios_version: str
     kernel: str
+    # Display only - never used for hardware matching (Fix.matches() keys on
+    # `product`, i.e. product_name, same as always; applies_to: {product:
+    # "nocturne"} and similar must keep matching exactly as before).
+    product_family: str = ""
 
     @classmethod
     def detect(cls) -> "Machine":
@@ -78,6 +82,7 @@ class Machine:
             bios_vendor=dmi("bios_vendor"),
             bios_version=dmi("bios_version"),
             kernel=os.uname().release,
+            product_family=dmi("product_family"),
         )
 
     @property
@@ -94,7 +99,18 @@ class Machine:
                    for d in os.listdir("/sys/bus/platform/devices"))
 
     def describe(self) -> str:
-        return (f"{self.vendor} {self.product}"
+        # product_name is a vendor-internal model/SKU code (Lenovo: "82XV"),
+        # not something anyone recognizes; product_family is the commercial
+        # name ("LOQ 15IRH8") when the vendor sets it - what GNOME's own
+        # About panel reads, and what this used to differ from on the same
+        # real machine (2026-10-02: ours said "LENOVO 82XV", GNOME said
+        # "Lenovo LOQ 15IRH8"). Not every machine sets this meaningfully -
+        # Chromebooks mostly do not - so fall back to the bare product_name
+        # exactly as before when it is blank or identical.
+        name = self.product
+        if self.product_family and self.product_family != self.product:
+            name = f"{self.product_family} ({self.product})"
+        return (f"{self.vendor} {name}"
                 f" (board {self.board}, {self.bios_vendor} {self.bios_version})")
 
 
