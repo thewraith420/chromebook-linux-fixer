@@ -393,7 +393,11 @@ def cmd_kernels(args, c):
     elif kind == "modules":
         print("  leftover modules; no kernel is installed for them")
     else:
-        print(f"  {pkg or 'installed by hand, not owned by any package'}")
+        # "installed by hand" used to fill this when unowned - a guess from
+        # "no dpkg owner" alone, wrong for a kernel the fixer itself had
+        # installed (Bob, 2026-10-02). Say nothing rather than guess wrong.
+        if pkg:
+            print(f"  {pkg}")
         if flags:
             print(f"  {flags}")
     print()

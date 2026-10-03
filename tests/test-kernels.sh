@@ -112,7 +112,14 @@ reset_all
 says  "lists an installed kernel"        "7.2.3-BobZKernel"   "$K" list
 says  "marks the running one"            "running"            "$K" list
 says  "names the owning package"         "linux-image-7.0.0-31-generic" "$K" list
-says  "says when one was hand-installed" "installed by hand"  "$K" list
+# "installed by hand" is a guess from "no dpkg owner" alone, wrong for a
+# kernel the fixer itself had installed (Bob, 2026-10-02) - dropped in
+# favour of saying nothing about install method. "-" is what fills the
+# owner column for an unowned kernel now (reset_all's 7.2.3-BobZKernel).
+lacks "never claims a kernel was 'installed by hand' - a guess it cannot back up" \
+      "installed by hand" "$K" list
+says  "an unowned kernel's owner column is a plain dash, not blank or a guess" \
+      '7\.2\.3-BobZKernel.*[^-]-$' "$K" list
 says  "shows leftover modules"           "modules with no kernel" "$K" list
 says  "names the leftover"               "7.0.0-27-generic"   "$K" list
 holds "tab output is one line each"      "$("$K" list --tab | wc -l)" = 4

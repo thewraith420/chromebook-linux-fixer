@@ -619,7 +619,12 @@ class Window(Adw.ApplicationWindow):
                 # the same 5 tab-separated columns everything else does.
                 subtitle = "saved command-line override with no matching kernel"
             else:
-                who = package or "installed by hand"
+                # "installed by hand" used to fill this when unowned - a
+                # guess from "no dpkg owner" alone, wrong for a kernel the
+                # fixer itself had installed (Bob, 2026-10-02:
+                # 7.2.8-BobZKernel-pixel-slate, which the fixer put there,
+                # showed it). Say nothing rather than guess wrong; the
+                # package name is real information and is still shown.
                 notes = []
                 if "running" in flag_set:
                     notes.append("running now")
@@ -627,9 +632,8 @@ class Window(Adw.ApplicationWindow):
                     notes.append("Nightfall boots this first")
                 if "no-initrd" in flag_set:
                     notes.append("no initrd")
-                subtitle = f"{human} · {who}"
-                if notes:
-                    subtitle += " · " + " · ".join(notes)
+                parts = [human] + ([package] if package else []) + notes
+                subtitle = " · ".join(parts)
             row = Adw.ActionRow(title=release, subtitle=subtitle)
             row.set_subtitle_lines(0)
             if kind in ("modules", "cmdline"):
@@ -806,8 +810,12 @@ class Window(Adw.ApplicationWindow):
                     f"along with its modules and headers packages.\n\n"
                     f"You will not be able to boot it again without reinstalling it.")
         else:
-            body = (f"{human}, installed by hand. Its kernel, initrd and modules "
-                    f"will be deleted and the GRUB menu rebuilt.\n\n"
+            # "installed by hand" used to claim an install method here - a
+            # guess from "no package owns it" alone, which was wrong for a
+            # kernel the fixer itself had installed (Bob, 2026-10-02).
+            # Describe what removal does instead of guessing how it got here.
+            body = (f"{human}, no package owns it. Its kernel, initrd and "
+                    f"modules will be deleted and the GRUB menu rebuilt.\n\n"
                     f"Nothing here can put it back: it would have to be built or "
                     f"installed again.")
         dialog = Adw.MessageDialog(

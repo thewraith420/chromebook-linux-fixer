@@ -276,8 +276,12 @@ cmd_list() {
         if [ "$tab" = --tab ]; then
             printf '%s\t%s\t%s\t%s\tkernel\n' "$r" "$size" "${pkg:-}" "$flags"
         else
-            printf '  %-38s %7s  %s\n' "$r" "$(human "$size")" \
-                   "$([ -n "$pkg" ] && echo "$pkg" || echo "installed by hand")"
+            # "installed by hand" used to fill this when unowned - a guess
+            # from "no dpkg owner" alone, wrong for a kernel this tool itself
+            # installed (Bob, 2026-10-02: 7.2.8-BobZKernel-pixel-slate, which
+            # the fixer put there, showed it). Say nothing rather than guess
+            # wrong; the package name is real information and still shown.
+            printf '  %-38s %7s  %s\n' "$r" "$(human "$size")" "${pkg:--}"
             [ -n "$flags" ] && printf '  %-38s %7s  %s\n' "" "" "$flags"
         fi
     done
@@ -642,9 +646,12 @@ ROOT
         return $?
     fi
 
-    # Hand-installed: exactly what a kernel install puts down, mirroring
+    # Unowned by dpkg: exactly what a kernel install puts down, mirroring
     # Nightfall's remove-kernel.sh, then update-grub so the menu follows.
-    echo "  installed by hand, not owned by any package"
+    # Says only what is actually known (no package claims it) - not "hand
+    # installed", a guess this tool cannot back up and was wrong for a
+    # kernel the fixer itself had installed (Bob, 2026-10-02).
+    echo "  no package owns this kernel - removing its files directly"
     $SUDO bash -s -- "$BOOT" "$MODULES" "$r" "$NF_DEFAULT_FILE" "$path" "$NF_CMDLINE_FILE" <<'ROOT'
 set -euo pipefail
 boot="$1"; modules="$2"; r="$3"; marker="$4"; path="$5"; cmdfile="$6"
