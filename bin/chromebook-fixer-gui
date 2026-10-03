@@ -717,18 +717,39 @@ class Window(Adw.ApplicationWindow):
         outright rather than hidden when there is nothing to reset - a
         missing button in a dialog that already exists looks like a bug, a
         disabled one explains itself.
+
+        Adw.AlertDialog, not the older Adw.MessageDialog every other dialog
+        in this file still uses - MessageDialog has no way to ask for it, and
+        sizes itself narrow by default, then stacks the three responses into
+        their own full-width rows once they no longer fit that self-chosen
+        width - not a portrait/screen-width problem (there was room either
+        way; confirmed on the Slate, both orientations), the dialog's own
+        default was just narrow. prefer_wide_layout keeps the response row
+        wide enough to lay out horizontally instead, in both orientations,
+        freeing the height back to the text box below. Scoped to just this
+        one dialog on purpose: migrating every dialog in this file is a
+        bigger change than this one layout problem calls for.
         """
-        dialog = Adw.MessageDialog(
-            transient_for=self, modal=True,
+        dialog = Adw.AlertDialog(
             heading=f"Edit command line — {release}",
             body="Takes effect on the next boot through Nightfall. Saved to "
-                "/boot/nightfall-cmdline; GRUB's own menu is never touched.")
+                "/boot/nightfall-cmdline; GRUB's own menu is never touched.",
+            prefer_wide_layout=True)
         buf = Gtk.TextBuffer(text=current)
+        # Monospace: easier to read and edit a long cmdline, and the one
+        # thing that actually helps the mid-token wrapping Bob hit (a UUID
+        # splitting at a hyphen, hid_google_hammer at the underscore) - WORD
+        # falling back to CHAR-wrap is correct behaviour for a token with no
+        # break opportunity that still does not fit whatever width the
+        # dialog ends up with; it cannot be eliminated outright without
+        # truncating the text, only made more readable once it happens.
+        # height_request raised from the stacked-buttons version (84) now
+        # that the response row no longer eats a third of the dialog.
         view = Gtk.TextView(buffer=buf, wrap_mode=Gtk.WrapMode.WORD_CHAR,
-                            top_margin=6, bottom_margin=6,
+                            monospace=True, top_margin=6, bottom_margin=6,
                             left_margin=8, right_margin=8)
         frame = Gtk.Frame(child=view, margin_top=12, margin_bottom=6,
-                          margin_start=12, margin_end=12, height_request=84)
+                          margin_start=12, margin_end=12, height_request=140)
         dialog.set_extra_child(frame)
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("reset", "Clear Saved")
@@ -745,7 +766,7 @@ class Window(Adw.ApplicationWindow):
             elif r == "reset":
                 self._reset_kernel_cmdline(release)
         dialog.connect("response", respond)
-        dialog.present()
+        dialog.present(self)
         return False
 
     def _set_kernel_cmdline(self, release, value):
