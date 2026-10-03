@@ -605,7 +605,14 @@ class Window(Adw.ApplicationWindow):
             human = (f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB")
             flag_set = set(f for f in flags.split(",") if f)
             if kind == "modules":
-                subtitle = f"{human} · modules left behind, no kernel installed for them"
+                if package:
+                    # dpkg's "rc" state (apt remove without --purge) - the
+                    # package field carries the owner(s) only in this case,
+                    # same as lib/kernels.sh's own listing.
+                    subtitle = (f"{human} · removed but not purged by apt "
+                               f"({package.replace(',', ', ')} still owns it)")
+                else:
+                    subtitle = f"{human} · modules left behind, no kernel installed for them"
             else:
                 who = package or "installed by hand"
                 notes = []

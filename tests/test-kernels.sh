@@ -29,6 +29,10 @@ cat > "$BIN/dpkg-query" <<'STUB'
 # -W -f '${Package} ${Status}\n' <pattern>
 pattern="${!#}"; rel=${pattern//\*/}
 case "$rel" in
+    # dpkg's own "rc" state (removed, config-files remain) - what `apt
+    # remove` without --purge leaves behind. Modelled on a real one: Software
+    # Updater left linux-modules-7.0.0-31-generic exactly like this.
+    *rcleft*) printf 'linux-image-%s deinstall ok config-files\nlinux-modules-%s deinstall ok config-files\n' "$rel" "$rel" ;;
     *generic*) printf 'linux-image-%s install ok installed\nlinux-modules-%s install ok installed\nnot-a-kernel-%s install ok installed\n' "$rel" "$rel" "$rel" ;;
 esac
 STUB
@@ -156,6 +160,19 @@ reset_all
 expect "removes leftover modules"        0 "$K" remove 7.0.0-27-generic
 holds  "  they are gone"                 ! -d "$MODS/7.0.0-27-generic"
 lacks  "  without calling apt"           "apt-get"            cat "$APT_LOG"
+
+# ---- leftover modules still owned by dpkg (rc state): purge, don't rm -rf --
+reset_all
+mkdir -p "$MODS/7.0.0-31-rcleft-generic"
+says   "listing says removed but not purged, names the owner" \
+       "removed but not purged by apt" "$K" list
+says   "  and the owning package"        "linux-image-7.0.0-31-rcleft-generic" "$K" list
+holds  "tab output carries the rc package in the 3rd field" \
+       "$("$K" list --tab | grep 7.0.0-31-rcleft-generic | cut -f3)" =        "linux-image-7.0.0-31-rcleft-generic,linux-modules-7.0.0-31-rcleft-generic"
+: > "$APT_LOG"
+expect "remove purges through apt rather than deleting by hand" 0 "$K" remove 7.0.0-31-rcleft-generic
+says   "  purges exactly the rc-state packages"  "apt-get -y purge linux-image-7.0.0-31-rcleft-generic linux-modules-7.0.0-31-rcleft-generic" cat "$APT_LOG"
+says   "  says it purged, not just removed"      "purged" "$K" remove 7.0.0-31-rcleft-generic
 
 # ---- the last kernel must survive ------------------------------------------
 rm -rf "$BOOT" "$MODS"; mkdir -p "$BOOT/grub" "$MODS"

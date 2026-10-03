@@ -92,6 +92,20 @@ packages_for() {
         | grep -E '^linux-' || true
 }
 
+# Packages dpkg still has in "removed, config-files remain" state (its own
+# `rc` flag) for a release: `apt remove` without --purge leaves these behind,
+# and dpkg still considers them the owner of whatever they shipped under
+# /lib/modules - including the directory itself, which an orphan-modules
+# removal must go through apt for, not delete by hand, or dpkg's own state
+# never clears (confirmed real: Software Updater did a bare `apt remove` on
+# linux-modules-7.0.0-31-generic, 2026-10-02, leaving exactly this).
+rc_packages_for() {
+    command -v dpkg-query >/dev/null 2>&1 || return 0
+    dpkg-query -W -f '${Package} ${Status}\n' "*$1*" 2>/dev/null \
+        | awk '$NF == "config-files" { print $1 }' \
+        | grep -E '^linux-' || true
+}
+
 bytes_of() {   # total bytes of everything belonging to a release
     local r="$1" total=0 f
     for f in "$BOOT/vmlinuz-$r" "$BOOT/initrd.img-$r" "$BOOT/System.map-$r" \
@@ -147,8 +161,12 @@ cmd_list() {
     done
     for r in $(orphan_modules); do
         size=$(du -sb "$MODULES/$r" 2>/dev/null | cut -f1 || echo 0)
+        local rc_pkgs; rc_pkgs=$(rc_packages_for "$r")
         if [ "$tab" = --tab ]; then
-            printf '%s\t%s\t\torphan\tmodules\n' "$r" "$size"
+            printf '%s\t%s\t%s\torphan\tmodules\n' "$r" "$size" "${rc_pkgs//$'\n'/,}"
+        elif [ -n "$rc_pkgs" ]; then
+            printf '  %-38s %7s  removed but not purged by apt (%s still owns it)\n' \
+                   "$r" "$(human "$size")" "$(echo $rc_pkgs | tr '\n' ' ')"
         else
             printf '  %-38s %7s  modules with no kernel - leftovers, safe to remove\n' \
                    "$r" "$(human "$size")"
@@ -200,6 +218,22 @@ cmd_remove() {
         [ "$r" = "$RUNNING" ] && die "refusing to touch the running kernel's modules ($r)"
         local size; size=$(du -sb "$MODULES/$r" 2>/dev/null | cut -f1 || echo 0)
         echo "removing leftover modules for $r ($(human "$size")); no kernel is installed for it"
+        local rc_pkgs; rc_pkgs=$(rc_packages_for "$r")
+        if [ -n "$rc_pkgs" ]; then
+            # dpkg still claims this directory (apt remove without --purge):
+            # go through apt, or the files come back deleted but dpkg still
+            # lists the package in rc state, which a later `apt --fix-broken`
+            # or upgrade can act on unpredictably. rm -rf would only make the
+            # mismatch between disk and dpkg's database worse, not better.
+            echo "  still owned by dpkg (removed, config-files remain): $(echo $rc_pkgs | tr '\n' ' ')"
+            echo "  purging those instead of deleting by hand, so dpkg's own state clears too"
+            $SUDO bash -s -- $rc_pkgs <<'ROOT'
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get -y purge "$@"
+ROOT
+            echo "purged." && return 0
+        fi
         $SUDO rm -rf "$MODULES/$r" && echo "removed." && return 0
         return 1
     fi
