@@ -21,19 +21,53 @@ if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
 fi
 
 # -- toolchain -------------------------------------------------------------
+# rustup-init is fetched over HTTPS from static.rust-lang.org and checked against
+# the .sha256 published beside it before anything runs. Never curl | sh. Installed
+# for this user only: no root, nothing outside ~/.cargo and ~/.rustup. Removable
+# with `rustup self uninstall`.
+install_rust_for_user() {
+    local base=https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu
+    local tmp want got
+    command -v curl >/dev/null || { echo "curl is needed to fetch rustup"; return 1; }
+    tmp=$(mktemp -d)
+    if ! curl --proto '=https' --tlsv1.2 -sSfL "$base/rustup-init" -o "$tmp/rustup-init" \
+       || ! curl --proto '=https' --tlsv1.2 -sSfL "$base/rustup-init.sha256" -o "$tmp/rustup-init.sha256"; then
+        echo "could not download rustup from static.rust-lang.org"
+        rm -rf "$tmp"; return 1
+    fi
+    want=$(awk '{print $1; exit}' "$tmp/rustup-init.sha256")
+    got=$(sha256sum "$tmp/rustup-init" | cut -d' ' -f1)
+    if [ -z "$want" ] || [ "$want" != "$got" ]; then
+        echo "rustup-init checksum does not match its published .sha256 - not running it"
+        rm -rf "$tmp"; return 1
+    fi
+    chmod +x "$tmp/rustup-init"
+    # --no-modify-path: this script puts ~/.cargo/bin on PATH itself, and the
+    # user's shell profile is not ours to edit.
+    local rc=0
+    "$tmp/rustup-init" -y --profile minimal --no-modify-path || rc=$?
+    rm -rf "$tmp"
+    return "$rc"
+}
+
 export PATH="$HOME/.cargo/bin:$PATH"
 if ! command -v cargo >/dev/null; then
+    # A build check reaches for neither the network nor an install: a missing
+    # toolchain is "cannot tell whether this still builds", which is not the
+    # same as "it does not". Same 0/1/2 split the detect scripts use.
+    if [ -n "${FIXER_BUILD_ONLY:-}" ]; then
+        echo "build-only: no Rust toolchain here, so cannot check the build"
+        exit 2
+    fi
     echo "This fix builds from source and needs a Rust toolchain."
-    echo "Install one for your user (no root, removable with rm -rf ~/.cargo ~/.rustup):"
-    echo
-    echo "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
-    echo
-    echo "then re-run this fix."
-    # 2, not 1, under a build check: a missing toolchain is "cannot tell
-    # whether this still builds", which is not the same as "it does not".
-    # Same 0/1/2 split the detect scripts use.
-    [ -n "${FIXER_BUILD_ONLY:-}" ] && exit 2
-    exit 1
+    echo "Installing one for your user (no root; about 600MB under ~/.rustup)..."
+    if ! install_rust_for_user; then
+        echo "Rust was not installed. Nothing was changed."
+        exit 1
+    fi
+    export PATH="$HOME/.cargo/bin:$PATH"
+    command -v cargo >/dev/null || { echo "rustup ran but cargo is still not on PATH"; exit 1; }
+    echo "installed Rust for this user (remove later with: rustup self uninstall)"
 fi
 
 # -- sources ---------------------------------------------------------------

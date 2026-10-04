@@ -60,7 +60,9 @@ danger: |
   is stopped, broken, or the scan fails, you get the password prompt. This
   cannot lock you out.
 
-  Builds from source and needs a Rust toolchain (~300MB via rustup if absent).
+  Builds from source. If no Rust toolchain is present, it installs one for your
+  user only (rustup, checksum-verified, no root, about 600MB under ~/.rustup);
+  remove that later with `rustup self uninstall`.
 
   The suspend hook runs as root on every suspend, unconditionally arming the
   sensor for whichever user has the active graphical session. It only arms
