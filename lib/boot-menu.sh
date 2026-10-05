@@ -150,7 +150,7 @@ cmd_show() {
     if [ "${s%%|*}" = on ]; then
         echo "                         at least $(ms_to_secs "${m%%|*}")s each   (${m#*|})"
         # if, not `&&`: as the last command in cmd_show a false test would
-        # make `show` - and `chromebook-fixer boot-menu` - exit 1.
+        # make `show` - and `nightfall-toolkit boot-menu` - exit 1.
         if [ "${m%%|*}" -lt 300 ]; then
             echo "                         under ~0.3s the spinner reads as a flicker"
         fi

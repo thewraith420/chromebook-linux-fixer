@@ -5,7 +5,7 @@ a userspace file.
 
 **Nothing here is applied automatically.** Building and installing a kernel is
 not something this tool does behind your back. These patches are shipped so the
-fix is reproducible, and so `chromebook-fixer` can *detect* whether a running
+fix is reproducible, and so `nightfall-toolkit` can *detect* whether a running
 kernel already carries them.
 
 ## Why a patch rather than a boot parameter

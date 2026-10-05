@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""chromebook-fixer — Nightfall Boot Manager, and hardware enablement fixes.
+"""nightfall-toolkit — Nightfall Boot Manager, and hardware enablement fixes.
 
-    chromebook-fixer status              what this machine needs
-    chromebook-fixer list                every known fix
-    chromebook-fixer apply <id>|--all    install
-    chromebook-fixer verify <id>         check it is still working
-    chromebook-fixer revert <id>         undo
-    chromebook-fixer boot-menu           what the boot menus do on their own
-    chromebook-fixer logs <id>           a fix's own diagnostic log
-    chromebook-fixer backups             what Nightfall has backed up
-    chromebook-fixer kernels             installed kernels, and the default
-    chromebook-fixer update              is anything behind? update fixer / Nightfall
+    nightfall-toolkit status              what this machine needs
+    nightfall-toolkit list                every known fix
+    nightfall-toolkit apply <id>|--all    install
+    nightfall-toolkit verify <id>         check it is still working
+    nightfall-toolkit revert <id>         undo
+    nightfall-toolkit boot-menu           what the boot menus do on their own
+    nightfall-toolkit logs <id>           a fix's own diagnostic log
+    nightfall-toolkit backups             what Nightfall has backed up
+    nightfall-toolkit kernels             installed kernels, and the default
+    nightfall-toolkit update              is anything behind? update this tool / Nightfall
 
 Nothing is applied without being asked for, and no fix runs unless its own
 detect script says the problem is actually present on this machine.
@@ -29,7 +29,7 @@ from registry import (CATEGORIES, Machine, load_fixes, STATE_DIR,  # noqa: E402
                       sudo_command)
 
 DISCLAIMER = """\
-chromebook-fixer makes LOW-LEVEL CHANGES to this system.
+nightfall-toolkit makes LOW-LEVEL CHANGES to this system.
 
 Depending on the fix, that can mean replacing system libraries, editing udev
 rules, patching vendor scripts, or altering kernel behaviour. Some fixes touch
@@ -41,7 +41,7 @@ This tool is developed and tested on ONE machine (Google Nocturne). Fixes are
 gated on hardware detection, but detection is imperfect and your hardware may
 differ in ways the author never saw.
 
-  * Read what a fix does before applying it: chromebook-fixer list -v
+  * Read what a fix does before applying it: nightfall-toolkit list -v
   * Every fix that can be reverted says so; some cannot be.
   * Save your work before applying anything marked HIGH RISK.
   * There is NO WARRANTY. You are responsible for your own machine.
@@ -130,7 +130,7 @@ def cmd_status(args, machine, fixes, c):
     print()
     if needed:
         print(f"{needed} fix(es) needed. Apply with: "
-              f"{c('chromebook-fixer apply <id>', BOLD)}")
+              f"{c('nightfall-toolkit apply <id>', BOLD)}")
     else:
         print(c("Everything applicable is already in place.", GREEN))
     if other:
@@ -472,7 +472,7 @@ def cmd_update(args, fixes, c):
     """
     Check for, and apply, updates to this tool and to Nightfall.
 
-    `update` with no target only LOOKS. Updating the fixer is a fast-forward of
+    `update` with no target only LOOKS. Updating the toolkit is a fast-forward of
     its own git checkout (lib/updates.sh refuses anything else). Updating
     Nightfall pulls its source checkout, then re-runs the nightfall fix's own
     apply in update mode: the newest kernel release is fetched instead of the
@@ -490,9 +490,9 @@ def cmd_update(args, fixes, c):
         return subprocess.call(cmd)
 
     worst = 0
-    if args.target in ("fixer", "all"):
+    if args.target in ("toolkit", "all"):
         sys.stdout.flush()
-        worst = max(worst, subprocess.call([str(script), "pull", "fixer"]))
+        worst = max(worst, subprocess.call([str(script), "pull", "toolkit"]))
     if args.target in ("nightfall", "all"):
         worst = max(worst, _update_nightfall(script, fixes, c, args.yes,
                                              args.nightfall_cmdline))
@@ -503,7 +503,7 @@ def _update_nightfall(script, fixes, c, assume_yes, nightfall_cmdline=None):
     fix = next((f for f in fixes if f.id == "nightfall"), None)
     if fix is None or fix.status()[0] != "applied":
         print(c("Nightfall is not installed here, so there is nothing to update. "
-                "Install it with: chromebook-fixer apply nightfall", YELLOW))
+                "Install it with: nightfall-toolkit apply nightfall", YELLOW))
         return 1
 
     # Ask what is behind before pulling or building anything.
@@ -587,7 +587,7 @@ def cmd_logs(args, fixes, c):
         for f in have:
             print(f"  {f.id:<28} {f.name}")
         print()
-        print(f"Show one with: {c('chromebook-fixer logs <id>', BOLD)}")
+        print(f"Show one with: {c('nightfall-toolkit logs <id>', BOLD)}")
         return 0
 
     match = next((f for f in fixes if f.id == args.fix), None)
@@ -707,7 +707,7 @@ def cmd_action(args, machine, fixes, c):
 
 def main():
     p = argparse.ArgumentParser(
-        prog="chromebook-fixer",
+        prog="nightfall-toolkit",
         description="Nightfall Boot Manager, and hardware enablement fixes "
                     "for Chromebooks running Linux.")
     p.add_argument("--no-colour", action="store_true")
@@ -763,8 +763,8 @@ def main():
                     help="skip the confirmation")
 
     pu = sub.add_parser("update",
-                        help="check for updates to the fixer and Nightfall, and apply them")
-    pu.add_argument("target", nargs="?", choices=("fixer", "nightfall", "all"),
+                        help="check for updates to this toolkit and Nightfall, and apply them")
+    pu.add_argument("target", nargs="?", choices=("toolkit", "nightfall", "all"),
                     help="what to update (omit to just check)")
     pu.add_argument("--check", action="store_true",
                     help="only report what is behind; change nothing")

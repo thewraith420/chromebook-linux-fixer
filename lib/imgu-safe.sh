@@ -41,7 +41,7 @@ To enable the hardware ISP, do ONE of these:
      Requires building a kernel. See kernel/README.md.
 
   2. Boot parameter (works today, no rebuild):
-         chromebook-fixer apply ipu3-imgu-iommu
+         nightfall-toolkit apply ipu3-imgu-iommu
      Adds iommu=pt, which keeps the IOMMU enabled and protecting every other
      device - unlike intel_iommu=off. Needs a reboot.
 

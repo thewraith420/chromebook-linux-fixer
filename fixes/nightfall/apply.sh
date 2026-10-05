@@ -120,10 +120,10 @@ if [ -z "$INSTALLER" ]; then
     echo "           ~/nocturne-boot-picker paths"
     echo
     echo "  git clone $NF_CLONE_URL"
-    echo "  chromebook-fixer apply nightfall"
+    echo "  nightfall-toolkit apply nightfall"
     echo
     echo "Or point at an existing one:"
-    echo "  FIXER_NIGHTFALL_REPO=/path/to/nightfall-boot-manager chromebook-fixer apply nightfall"
+    echo "  FIXER_NIGHTFALL_REPO=/path/to/nightfall-boot-manager nightfall-toolkit apply nightfall"
     echo "Nothing was changed."
     # No checkout is "cannot check here", not "the source is broken".
     [ -n "${FIXER_BUILD_ONLY:-}" ] && exit 2
@@ -154,7 +154,7 @@ SRC_SHA=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)
 # Nightfall.
 KERNEL="${FIXER_NIGHTFALL_KERNEL:-${FIXER_PICKER_KERNEL:-}}"
 EXPLICIT_KERNEL="$KERNEL"
-# FIXER_NIGHTFALL_UPDATE=1 is `chromebook-fixer update nightfall`: the point is
+# FIXER_NIGHTFALL_UPDATE=1 is `nightfall-toolkit update nightfall`: the point is
 # to replace what is installed, so the installed /boot/nightfall/vmlinuz must
 # never be picked up as "the kernel already found" - the newest release is
 # fetched instead, and the UI is rebuilt from the freshly pulled checkout.
@@ -301,7 +301,7 @@ if { [ -z "$KERNEL" ] || [ ! -r "$KERNEL" ]; } && [ -z "${FIXER_BUILD_ONLY:-}" ]
     echo "It is built from BobZKernel's picker-kernel branch, on a real machine,"
     echo "not here, and published as a GitHub release when it is - this looked"
     echo "for one there and found none usable. Point this at one directly:"
-    echo "  FIXER_NIGHTFALL_KERNEL=/path/to/vmlinuz chromebook-fixer apply nightfall"
+    echo "  FIXER_NIGHTFALL_KERNEL=/path/to/vmlinuz nightfall-toolkit apply nightfall"
     echo "Nothing was changed."
     exit 1
 fi

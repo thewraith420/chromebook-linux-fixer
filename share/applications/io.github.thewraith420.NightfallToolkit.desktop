@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=Nightfall Boot Manager — Chromebook Fixer
+Name=Nightfall Toolkit
 GenericName=Boot Manager and Hardware Fixes
-Comment=Set up Nightfall Boot Manager and apply Chromebook hardware fixes
-Exec=chromebook-fixer-gui
-Icon=org.chromebookfixer.Gui
+Comment=Install and manage Nightfall Boot Manager, and apply Chromebook hardware fixes
+Exec=nightfall-toolkit-gui
+Icon=io.github.thewraith420.NightfallToolkit
 Terminal=false
 Categories=Settings;HardwareSettings;GTK;
 Keywords=nightfall;boot;bootloader;grub;kernel;chromebook;hardware;camera;fix;

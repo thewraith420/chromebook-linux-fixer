@@ -6,7 +6,7 @@ RULES=/etc/udev/rules.d/60-chromebook-backlight.rules
 USER_NAME="${SUDO_USER:-$USER}"
 
 $SUDO tee "$RULES" >/dev/null <<'RULEEOF'
-# Written by chromebook-fixer (backlight-permissions).
+# Written by nightfall-toolkit (backlight-permissions).
 #
 # Give the video group write access to brightness. Not MODE="0666": that is
 # world-writable, letting any local account change the display. Group

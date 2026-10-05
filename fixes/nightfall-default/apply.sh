@@ -48,4 +48,4 @@ ROOT
 echo
 echo "Done. The next boot goes straight into Nightfall's touch menu."
 echo "If it ever misbehaves, it still falls back to booting the first kernel,"
-echo "and 'chromebook-fixer revert nightfall-default' puts this back."
+echo "and 'nightfall-toolkit revert nightfall-default' puts this back."

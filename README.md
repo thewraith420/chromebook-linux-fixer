@@ -17,10 +17,10 @@ Linux: the IPU3 cameras, screen rotation and brightness, the fingerprint reader
 in the power button, audio, the volume buttons, and Waydroid. Each fix checks
 whether this machine actually has the problem before it changes anything.
 
-> **The command is still called `chromebook-fixer`.** The project was renamed
-> from `chromebook-linux-fixer` on 2026-10-05. The commands, the menu entry and
-> the app's own labels keep the old name for now; renaming them is planned.
-> GitHub forwards the old repository address, so existing copies keep updating.
+> Renamed from `chromebook-linux-fixer` (command `chromebook-fixer`) on
+> 2026-10-05. An existing install switches to the new names the next time it
+> updates itself (`chromebook-fixer update fixer`, on the old version). GitHub
+> forwards the old repository address, so that update still finds it.
 
 ---
 
@@ -51,7 +51,7 @@ kernel panic and nothing written to any log.
 
 Sensible precautions:
 
-- Read what a fix does first: `chromebook-fixer list -v`
+- Read what a fix does first: `nightfall-toolkit list -v`
 - Save your work before applying anything marked **HIGH RISK**
 - Apply one fix at a time rather than `--all`
 - Check `reverts_cleanly`: a few fixes cannot be cleanly undone
@@ -66,7 +66,7 @@ You are asked to acknowledge this once, before your first `apply`.
 git clone https://github.com/thewraith420/nightfall-toolkit.git
 cd nightfall-toolkit
 ./install.sh          # per-user: links into ~/.local/bin and adds a menu entry
-chromebook-fixer status
+nightfall-toolkit status
 ```
 
 If `~/.local/bin` is not on your `PATH` yet (common on a fresh Ubuntu),
@@ -78,9 +78,9 @@ them, and batches each fix's root work into a single prompt. You can also run
 it straight from the clone without installing.
 
 `./uninstall.sh` removes the links and the menu entry. It does **not** undo
-applied fixes; use `chromebook-fixer revert <id>` for those.
+applied fixes; use `nightfall-toolkit revert <id>` for those.
 
-The app is in your menu as **Nightfall Boot Manager — Chromebook Fixer**. It
+The app is in your menu as **Nightfall Toolkit**. It
 opens on Nightfall, with the hardware fixes one level down.
 
 ---
@@ -90,8 +90,8 @@ opens on Nightfall, with the hardware fixes one level down.
 Install it, and optionally make it the default GRUB entry:
 
 ```
-chromebook-fixer apply nightfall
-chromebook-fixer apply nightfall-default
+nightfall-toolkit apply nightfall
+nightfall-toolkit apply nightfall-default
 ```
 
 Installing builds Nightfall's touch UI and boot image on this machine, because
@@ -102,23 +102,23 @@ published `SHA256SUMS`. Missing build tools are installed with apt.
 ### Settings
 
 ```
-chromebook-fixer boot-menu                                # every boot setting, current values
-chromebook-fixer boot-menu --nightfall 20                 # Nightfall's menu timeout, seconds
-chromebook-fixer boot-menu --grub 5                       # GRUB's own menu timeout
-chromebook-fixer boot-menu --rotate 90 --autorotate off   # starting rotation; follow the accelerometer or not
-chromebook-fixer boot-menu --splash off --splash-secs 0.5 # boot screens on/off, minimum time each stays up
+nightfall-toolkit boot-menu                                # every boot setting, current values
+nightfall-toolkit boot-menu --nightfall 20                 # Nightfall's menu timeout, seconds
+nightfall-toolkit boot-menu --grub 5                       # GRUB's own menu timeout
+nightfall-toolkit boot-menu --rotate 90 --autorotate off   # starting rotation; follow the accelerometer or not
+nightfall-toolkit boot-menu --splash off --splash-secs 0.5 # boot screens on/off, minimum time each stays up
 ```
 
 ### Kernels
 
 ```
-chromebook-fixer kernels                                  # installed kernels, and Nightfall's default
-chromebook-fixer kernels --install <tarball> [--set-default]  # install a BobZKernel portable-installer tarball
-chromebook-fixer kernels --default <release>              # make Nightfall boot this one first
-chromebook-fixer kernels --remove <release>               # asks you to type the release first
-chromebook-fixer kernels --cmdline <release>              # the saved command line, or GRUB's own if none
-chromebook-fixer kernels --cmdline <release> --set "..."  # save a command line for this kernel
-chromebook-fixer kernels --cmdline <release> --reset      # drop it; fall back to GRUB's entry
+nightfall-toolkit kernels                                  # installed kernels, and Nightfall's default
+nightfall-toolkit kernels --install <tarball> [--set-default]  # install a BobZKernel portable-installer tarball
+nightfall-toolkit kernels --default <release>              # make Nightfall boot this one first
+nightfall-toolkit kernels --remove <release>               # asks you to type the release first
+nightfall-toolkit kernels --cmdline <release>              # the saved command line, or GRUB's own if none
+nightfall-toolkit kernels --cmdline <release> --set "..."  # save a command line for this kernel
+nightfall-toolkit kernels --cmdline <release> --reset      # drop it; fall back to GRUB's entry
 ```
 
 `kernels` also lists leftovers: module folders with no kernel, packages apt
@@ -135,8 +135,8 @@ same editor.
 ### Backups
 
 ```
-chromebook-fixer backups                                  # Nightfall's backups, on any mounted drive
-chromebook-fixer backups --delete <name>                  # asks you to type the name first
+nightfall-toolkit backups                                  # Nightfall's backups, on any mounted drive
+nightfall-toolkit backups --delete <name>                  # asks you to type the name first
 ```
 
 Nightfall takes backups on the Pixel Slate only for now, so the GUI shows this
@@ -151,9 +151,9 @@ biggest thing on the drive.
 ### Updates
 
 ```
-chromebook-fixer update                  # is anything behind? changes nothing
-chromebook-fixer update fixer            # update this toolkit
-chromebook-fixer update nightfall        # newest Nightfall source and kernel, rebuilt and reinstalled
+nightfall-toolkit update                  # is anything behind? changes nothing
+nightfall-toolkit update toolkit          # update this toolkit
+nightfall-toolkit update nightfall        # newest Nightfall source and kernel, rebuilt and reinstalled
 ```
 
 - **Nothing is merged or overwritten.** Both git checkouts update
@@ -182,16 +182,16 @@ The GUI checks for updates in the background each time it opens, and shows an
 ## Hardware fixes (Pixel Slate)
 
 ```
-chromebook-fixer status          # what this machine needs
-chromebook-fixer list -v         # every fix, with what it does and its risks
-chromebook-fixer apply <id>      # install one
-chromebook-fixer verify <id>     # is it still working?
-chromebook-fixer revert <id>     # undo it
-chromebook-fixer logs [<id>]     # a fix's own log, for those that keep one
-chromebook-fixer selftest [<id>] # check the from-source fixes still build; installs nothing
+nightfall-toolkit status          # what this machine needs
+nightfall-toolkit list -v         # every fix, with what it does and its risks
+nightfall-toolkit apply <id>      # install one
+nightfall-toolkit verify <id>     # is it still working?
+nightfall-toolkit revert <id>     # undo it
+nightfall-toolkit logs [<id>]     # a fix's own log, for those that keep one
+nightfall-toolkit selftest [<id>] # check the from-source fixes still build; installs nothing
 
-chromebook-fixer apply --kernel list        # which kernels are installed
-chromebook-fixer apply <id> -k <version>    # target a specific kernel
+nightfall-toolkit apply --kernel list        # which kernels are installed
+nightfall-toolkit apply <id> -k <version>    # target a specific kernel
 ```
 
 Nothing is applied unless you name it (or pass `--all`) **and** the fix's own
@@ -237,9 +237,9 @@ reasoning, not evidence: only the Pixel Slate has been tested.
 **You do not need to rebuild a kernel.**
 
 ```
-chromebook-fixer apply ipu3-imgu-iommu   # adds iommu=pt
+nightfall-toolkit apply ipu3-imgu-iommu   # adds iommu=pt
 sudo reboot
-chromebook-fixer apply ipu3-camera       # now builds the hardware path
+nightfall-toolkit apply ipu3-camera       # now builds the hardware path
 ```
 
 The IPU3's hardware image processor only needs its device in an IOMMU
@@ -359,8 +359,8 @@ Guidelines that matter more than they look:
 ## Layout
 
 ```
-bin/chromebook-fixer       CLI
-bin/chromebook-fixer-gui   GTK4 / libadwaita app
+bin/nightfall-toolkit      CLI
+bin/nightfall-toolkit-gui  GTK4 / libadwaita app
 lib/registry.py            fix discovery, DMI matching, lifecycle
 lib/updates.sh             update checks and fast-forward pulls
 lib/kernels.sh             kernel listing, install, removal, command lines

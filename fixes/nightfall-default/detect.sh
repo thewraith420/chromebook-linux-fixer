@@ -69,7 +69,7 @@ case "$OUTCOME" in
     "")  echo "not yet: Nightfall's log has no outcome line; cannot judge it"
          exit 1 ;;
     *)   echo "not yet: the last boot through Nightfall ended in '$OUTCOME'"
-         echo "see 'chromebook-fixer logs nightfall' - fix that before pinning it"
+         echo "see 'nightfall-toolkit logs nightfall' - fix that before pinning it"
          exit 1 ;;
 esac
 

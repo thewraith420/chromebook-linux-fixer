@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Fix registry: discovery, hardware matching and state for chromebook-fixer.
+"""Fix registry: discovery, hardware matching and state for nightfall-toolkit.
 
 A "fix" is a directory under fixes/ containing a fix.yaml plus up to four
 executables: detect, apply, verify, revert.

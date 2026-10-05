@@ -47,7 +47,7 @@ set -euo pipefail
 CONF="$1"; TPLG="$2"; TPLG_BAK="$3"; DISABLE_SPEAKERS="$4"
 
 cat > "$CONF" <<'CONF_BODY'
-# Written by chromebook-fixer (audio-avs-dsp).
+# Written by nightfall-toolkit (audio-avs-dsp).
 options snd-intel-dspcfg dsp_driver=4
 # Some of these boards ship AVS firmware whose version does not match what
 # the driver expects, and it refuses to load without this. Where the version

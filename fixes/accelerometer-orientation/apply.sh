@@ -15,7 +15,7 @@ case "$PRODUCT" in
 esac
 
 {
-    echo "# Written by chromebook-fixer (accelerometer-orientation)."
+    echo "# Written by nightfall-toolkit (accelerometer-orientation)."
     echo "#"
     echo "# The EC's asynchronous event delivery does not work on these machines, so"
     echo "# iio-sensor-proxy never receives trigger-driven readings. Tell it to poll."

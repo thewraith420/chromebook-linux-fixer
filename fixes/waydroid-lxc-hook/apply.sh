@@ -98,7 +98,7 @@ if [ "$refresh" = 1 ]; then
     umask 022
     if ! cp "$proc_cmdline" "$snapshot" 2>/dev/null; then
         if [ ! -e "$snapshot" ]; then
-            echo "unavailable - see chromebook-fixer waydroid-lxc-hook" > "$snapshot"
+            echo "unavailable - see nightfall-toolkit waydroid-lxc-hook" > "$snapshot"
         fi
         echo "note: $proc_cmdline could not be read (even as root), so the" \
              "container's private copy is a placeholder rather than a real" \

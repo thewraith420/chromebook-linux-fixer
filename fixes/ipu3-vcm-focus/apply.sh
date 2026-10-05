@@ -8,7 +8,7 @@ POSITION="${VCM_FOCUS_POSITION:-1800}"
 RULE=/etc/udev/rules.d/99-chromebook-vcm-focus.rules
 # Match on ATTR{name}: /dev/v4l-subdevN numbering is not stable across reboots.
 $SUDO tee "$RULE" >/dev/null <<RULES
-# Chromebook rear-camera lens focus default. Managed by chromebook-fixer.
+# Chromebook rear-camera lens focus default. Managed by nightfall-toolkit.
 # The ak7375 VCM powers on at 0 (hard against one end of travel), leaving the
 # rear camera a blur until something drives it.
 ACTION=="add", SUBSYSTEM=="video4linux", ATTR{name}=="ak7375*", \\

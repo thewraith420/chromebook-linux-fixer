@@ -17,7 +17,7 @@ if ! "$FIXER_REPO/lib/dkms-support.sh" --kernel "$TARGET" 2>/dev/null; then
         printf '    %s\n' "${OK[@]}"
         echo
         echo "To build for one of them (it will take effect when you boot it):"
-        echo "    FIXER_KERNEL=${OK[0]} chromebook-fixer apply $FIX_ID"
+        echo "    FIXER_KERNEL=${OK[0]} nightfall-toolkit apply $FIX_ID"
     else
         "$FIXER_REPO/lib/dkms-support.sh" --why
     fi

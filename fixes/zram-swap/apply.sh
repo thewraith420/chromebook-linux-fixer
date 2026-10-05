@@ -29,7 +29,7 @@ done
 #
 # Priority 100 puts zram ahead of any disk swap, which stays as overflow.
 $SUDO tee "$CONF" >/dev/null <<'CONFEOF'
-# Written by chromebook-fixer (zram-swap).
+# Written by nightfall-toolkit (zram-swap).
 # Compressed swap in RAM, so pressure does not land on slow eMMC flash.
 [zram0]
 zram-size = min(ram / 2, 4096)

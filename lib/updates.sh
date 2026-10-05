@@ -1,16 +1,16 @@
 #!/bin/bash
 # updates.sh — is this machine behind, and (for the two git checkouts) catch up.
 #
-#   updates.sh check [--porcelain] [fixer|nightfall-source|nightfall-kernel]...
-#   updates.sh pull  fixer|nightfall-source
+#   updates.sh check [--porcelain] [toolkit|nightfall-source|nightfall-kernel]...
+#   updates.sh pull  toolkit|nightfall-source
 #
 # Three things can be out of date, and they are three different kinds of stale:
 #
-#   fixer             this tool - a git checkout; ~/.local/bin/* are symlinks
+#   toolkit           this tool - a git checkout; ~/.local/bin/* are symlinks
 #                     into it, so a fast-forward IS the update.
 #   nightfall-source  the nightfall-boot-manager checkout the `nightfall` fix
 #                     builds from. Pulled here; REBUILT and reinstalled by
-#                     `chromebook-fixer update nightfall`, which is the part
+#                     `nightfall-toolkit update nightfall`, which is the part
 #                     that needs root.
 #   nightfall-kernel  /boot/nightfall/vmlinuz against BobZKernel's newest
 #                     "nightfall" release. Only compared here - replacing it
@@ -89,7 +89,7 @@ row() {   # row <component> <state> <installed> <available> <detail>
         return
     fi
     local label; case "$1" in
-        fixer)            label="Chromebook Fixer" ;;
+        toolkit)          label="Nightfall Toolkit" ;;
         nightfall-source) label="Nightfall (source)" ;;
         nightfall-kernel) label="Nightfall kernel" ;;
         *)                label="$1" ;;
@@ -104,9 +104,9 @@ row() {   # row <component> <state> <installed> <available> <detail>
     return 0
 }
 
-check_fixer() {
+check_toolkit() {
     git_state "$FIXER_ROOT"
-    row fixer "$G_STATE" "$G_INSTALLED" "$G_AVAILABLE" "$G_DETAIL"
+    row toolkit "$G_STATE" "$G_INSTALLED" "$G_AVAILABLE" "$G_DETAIL"
 }
 
 check_nightfall_source() {
@@ -183,11 +183,11 @@ check_nightfall_kernel() {
 
 cmd_check() {
     local want=("$@") c
-    [ ${#want[@]} -gt 0 ] || want=(fixer nightfall-source nightfall-kernel)
+    [ ${#want[@]} -gt 0 ] || want=(toolkit nightfall-source nightfall-kernel)
     [ -n "$PORCELAIN" ] || echo "Updates:"
     for c in "${want[@]}"; do
         case "$c" in
-            fixer)            check_fixer ;;
+            toolkit)          check_toolkit ;;
             nightfall-source) check_nightfall_source ;;
             nightfall-kernel) check_nightfall_kernel ;;
             *) die "unknown component: $c" ;;
@@ -217,8 +217,8 @@ pull_checkout() {
 
 cmd_pull() {
     case "${1:-}" in
-        fixer)
-            pull_checkout "$FIXER_ROOT" "Chromebook Fixer" || exit 1
+        toolkit)
+            pull_checkout "$FIXER_ROOT" "Nightfall Toolkit" || exit 1
             [ -n "$PULLED" ] || exit 0
             # The desktop entry and icon are COPIES made by install.sh, so a
             # pull alone leaves them stale; re-running it is idempotent.
@@ -234,7 +234,7 @@ cmd_pull() {
                 || die "no nightfall-boot-manager checkout found on this machine"
             pull_checkout "$src" "Nightfall source" || exit 1
             ;;
-        *) die "usage: updates.sh pull fixer|nightfall-source" ;;
+        *) die "usage: updates.sh pull toolkit|nightfall-source" ;;
     esac
 }
 
@@ -245,10 +245,10 @@ main() {
     case "$sub" in
         check) cmd_check "$@" ;;
         pull)  cmd_pull "$@" ;;
-        *) die "usage: updates.sh check [--porcelain] [component...] | pull fixer|nightfall-source" ;;
+        *) die "usage: updates.sh check [--porcelain] [component...] | pull toolkit|nightfall-source" ;;
     esac
 }
-# A function and an explicit exit: `pull fixer` replaces this very file on
+# A function and an explicit exit: `pull toolkit` replaces this very file on
 # disk, and bash must not go on reading a script that changed under it.
 main "$@"
 exit $?

@@ -57,6 +57,6 @@ case "$OUTCOME" in
     "")      ;;                       # never booted through it, or no log
     *fallback*|*failed*|*error*)
         echo "WARNING: last boot through it ended in: $OUTCOME"
-        echo "see 'chromebook-fixer logs nightfall' for why" ;;
+        echo "see 'nightfall-toolkit logs nightfall' for why" ;;
     *)       echo "last boot through it: $OUTCOME" ;;
 esac

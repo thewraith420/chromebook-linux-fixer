@@ -5,7 +5,7 @@ ROT="${CAMERA_ROTATION:-imx319:180,imx355:0}"
 LOC="${CAMERA_LOCATION:-imx319:front,imx355:back}"
 mkdir -p "$(dirname "$CONF")"
 cat > "$CONF" <<CONFEOF
-# Camera sensor mounting data. Managed by chromebook-fixer.
+# Camera sensor mounting data. Managed by nightfall-toolkit.
 #
 # The drivers do not expose rotation or front/back, and the firmware does not
 # carry the ChromeOS SSDB table these values normally come from. Determined by
@@ -21,4 +21,4 @@ echo "wrote $CONF"
 echo "  rotation: $ROT"
 echo "  location: $LOC"
 echo "If the picture is still wrong, re-run with e.g."
-echo "  CAMERA_ROTATION=imx319:270,imx355:90 chromebook-fixer apply camera-orientation"
+echo "  CAMERA_ROTATION=imx319:270,imx355:90 nightfall-toolkit apply camera-orientation"

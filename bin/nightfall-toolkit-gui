@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""chromebook-fixer-gui — Nightfall Boot Manager, and a window over the CLI.
+"""nightfall-toolkit-gui — Nightfall Boot Manager, and a window over the CLI.
 
 Deliberately a front-end, not a reimplementation: it shells out to the same
 CLI, so detection, safety gating and the fix lifecycle have exactly one
@@ -19,10 +19,11 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
+CLI = str(REPO / "bin" / "nightfall-toolkit")
 sys.path.insert(0, str(REPO / "lib"))
 from registry import CATEGORIES, Machine, load_fixes, STATE_DIR  # noqa: E402
 
-# The same one-time acknowledgement bin/chromebook-fixer's first_run_gate()
+# The same one-time acknowledgement bin/nightfall-toolkit's first_run_gate()
 # requires before any apply/revert, and the same stamp file - so accepting it
 # here means the CLI subprocess this window is about to run finds it already
 # there and never touches its own stdin prompt for it. That prompt is the
@@ -170,7 +171,7 @@ class Window(Adw.ApplicationWindow):
 
     def __init__(self, app):
         super().__init__(application=app,
-                         title="Nightfall Boot Manager — Chromebook Fixer",
+                         title="Nightfall Toolkit",
                          default_width=760, default_height=self._screen_cap_height())
         self.machine = Machine.detect()
         self.rows = []              # every FixRow, for refreshing
@@ -381,7 +382,7 @@ class Window(Adw.ApplicationWindow):
             description="Checked when the window opened. Nothing is changed "
                         "until you press Update.")
         self._upd_rows = {}
-        for key, title in (("fixer", "Chromebook Fixer"),
+        for key, title in (("toolkit", "Nightfall Toolkit"),
                            ("nightfall", "Nightfall Boot Manager")):
             row = Adw.ActionRow(title=title, visible=False)
             row.set_subtitle_lines(0)
@@ -404,7 +405,7 @@ class Window(Adw.ApplicationWindow):
             rows = {}
             try:
                 out = subprocess.run(
-                    [str(REPO / "bin" / "chromebook-fixer"), "--no-colour",
+                    [CLI, "--no-colour",
                      "update", "--check", "--porcelain"],
                     capture_output=True, text=True, timeout=90).stdout
                 for line in out.splitlines():
@@ -434,14 +435,14 @@ class Window(Adw.ApplicationWindow):
 
         shown = False
         # Fixer: one component.
-        state, hit = combine(["fixer"])
+        state, hit = combine(["toolkit"])
         # Nightfall: its source checkout and its kernel. Only when installed -
         # the kernel row is "na" when it is not, and there is nothing to update.
         nf_installed = rows.get("nightfall-kernel", blank)[1] != "na"
         nf_state, nf_hit = combine(["nightfall-source", "nightfall-kernel"]) \
             if nf_installed else ("current", [])
 
-        for key, st, hits in (("fixer", state, hit), ("nightfall", nf_state, nf_hit)):
+        for key, st, hits in (("toolkit", state, hit), ("nightfall", nf_state, nf_hit)):
             row, btn = self._upd_rows[key]
             row.set_visible(st in ("behind", "blocked"))
             if st == "current":
@@ -450,7 +451,7 @@ class Window(Adw.ApplicationWindow):
             lines = []
             for f in hits:
                 if st == "behind":
-                    what = {"fixer": "this tool", "nightfall-source": "source",
+                    what = {"toolkit": "this tool", "nightfall-source": "source",
                             "nightfall-kernel": "kernel"}[f[0]]
                     lines.append(f"{what}: {f[2]} \u2192 {f[3]}")
                 else:
@@ -464,10 +465,10 @@ class Window(Adw.ApplicationWindow):
         if not DISCLAIMER_STAMP.exists():
             self._confirm_disclaimer(lambda: self._confirm_update(key))
             return
-        if key == "fixer":
+        if key == "toolkit":
             # A fast-forward of this tool's own checkout; refuses anything
             # else itself. No dialog needed.
-            self._run_update("fixer")
+            self._run_update("toolkit")
             return
         dialog = Adw.MessageDialog(
             transient_for=self, heading="Update Nightfall?",
@@ -484,7 +485,7 @@ class Window(Adw.ApplicationWindow):
         dialog.present()
 
     def _run_update(self, key, nightfall_cmdline=None):
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         cmd = [cli, "--no-colour", "update", key, "--yes"]
         if nightfall_cmdline is not None:
             cmd += ["--nightfall-cmdline", nightfall_cmdline]
@@ -595,7 +596,7 @@ class Window(Adw.ApplicationWindow):
         dialog.present()
 
     def _install_kernel(self, path):
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         self._run_in_window(f"install kernel from {Path(path).name}",
                             [cli, "--no-colour", "kernels", "--install", path],
                             stream=True, refresh_after=True)
@@ -708,7 +709,7 @@ class Window(Adw.ApplicationWindow):
         return False
 
     def _set_default_kernel(self, release):
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         self._run_in_window(f"default kernel {release}",
                             [cli, "--no-colour", "kernels", "--default", release],
                             stream=False, refresh_after=True)
@@ -721,7 +722,7 @@ class Window(Adw.ApplicationWindow):
         through askpass_env() the same way _scan_kernels does, rather than
         blocking the GUI thread or guessing at a value to show.
         """
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
 
         def fetch():
             try:
@@ -818,13 +819,13 @@ class Window(Adw.ApplicationWindow):
         # still have real newlines in it (paste, Enter) - collapse them
         # rather than letting the file format split silently.
         value = " ".join(value.splitlines()).strip()
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         self._run_in_window(f"cmdline {release}",
                             [cli, "--no-colour", "kernels", "--cmdline", release, "--set", value],
                             stream=True, refresh_after=True)
 
     def _reset_kernel_cmdline(self, release):
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         self._run_in_window(f"reset cmdline {release}",
                             [cli, "--no-colour", "kernels", "--cmdline", release, "--reset"],
                             stream=True, refresh_after=True)
@@ -863,7 +864,7 @@ class Window(Adw.ApplicationWindow):
         dialog.present()
 
     def _remove_kernel(self, release):
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         self._run_in_window(f"remove kernel {release}",
                             [cli, "--no-colour", "kernels", "--remove", release, "--yes"],
                             stream=True, refresh_after=True)
@@ -978,7 +979,7 @@ class Window(Adw.ApplicationWindow):
         dialog.present()
 
     def _delete_backup(self, directory, name):
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         self._run_in_window(f"delete backup {name}",
                             [cli, "--no-colour", "backups", "--delete", name,
                              "--dir", directory, "--yes"],
@@ -1357,7 +1358,7 @@ class Window(Adw.ApplicationWindow):
                 f"boot screens are off")
 
     def _run_boot_menu(self, flag, value, extra=()):
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         cmd = [cli, "--no-colour", "boot-menu", f"--{flag}", str(value), *extra]
         self._run_in_window(f"boot-menu {flag}", cmd,
                             stream=False, refresh_after=True)
@@ -1610,7 +1611,7 @@ class Window(Adw.ApplicationWindow):
         dialog.present()
 
     def _execute(self, action, fix):
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         self._run_in_window(f"{action} {fix.id}",
                             [cli, "--no-colour", action, fix.id, "--yes"])
 
@@ -1624,7 +1625,7 @@ class Window(Adw.ApplicationWindow):
         main loop one idle callback at a time is visibly slow on the hardware
         this runs on.
         """
-        cli = str(REPO / "bin" / "chromebook-fixer")
+        cli = CLI
         self._run_in_window(f"logs {fix.id}",
                             [cli, "--no-colour", "logs", fix.id],
                             stream=False, refresh_after=False)
@@ -1734,7 +1735,7 @@ class Window(Adw.ApplicationWindow):
 
 class Application(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="org.chromebookfixer.Gui")
+        super().__init__(application_id="io.github.thewraith420.NightfallToolkit")
         self._styled = False
 
     def do_activate(self):

@@ -36,7 +36,7 @@ danger: |
 
   Rebuilding Nightfall's initramfs while it is the default is the risky
   sequence: the new image is untested and already in the boot path. Check
-  `chromebook-fixer logs nightfall` after the first boot on a new image.
+  `nightfall-toolkit logs nightfall` after the first boot on a new image.
 notes: |
   Writes GRUB_DEFAULT in /etc/default/grub and runs update-grub. Nothing else
   in the boot configuration is touched, and Nightfall's own entry in

@@ -23,7 +23,7 @@ else
     echo "  it costs most of a CPU core while streaming."
     echo
     echo "  Once the kernel can drive the ImgU safely, re-run:"
-    echo "      chromebook-fixer apply ipu3-camera"
+    echo "      nightfall-toolkit apply ipu3-camera"
     echo "  and it will switch to the hardware path automatically."
 fi
 echo
