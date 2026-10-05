@@ -1,4 +1,4 @@
-# chromebook-linux-fixer
+# nightfall-toolkit
 
 A CLI (+ GUI) that packages Chromebook Linux hardware-enablement fixes as self-contained, detection-gated units — camera (IPU3), display/rotation, audio, EC/buttons, fingerprint, Waydroid, zram. Built and tested on exactly one machine: the Google Pixel Slate (Nocturne). Every fix is hardware-detected, but detection is imperfect on other hardware, and the README is explicit about that.
 
@@ -108,6 +108,6 @@ Running risky fixer applies from inside Nightfall, with the real root not in use
 5. `accelerometer-orientation`/`display-autorotate`/`tablet-mode-switch` were **prior art** for Nightfall's auto-rotate, which is now **done and calibrated** (`7d69a4b`, plus `5a7bc5e` for touch that still followed the startup rotation). The driver chain question that blocked it is answered and needs no re-checking: `cros-ec-accel` and `cros-ec-gyro` enumerate as IIO devices inside the stripped `picker-kernel` too, visible in every Nightfall boot log under "display accelerometer" — `chromebook-fixer logs nightfall`. That block exists *because* the calibration work used it, so do not read it as an open question. This repo's own rotation fixes are unaffected: they handle the full OS, Nightfall handles its own environment, and neither drives the other.
 
 ## Local paths
-- This checkout: `~/buildstuff/chromebook-linux-fixer` (kept in sync with GitHub, this is the canonical working copy)
+- This checkout: `~/buildstuff/nightfall-toolkit` (kept in sync with GitHub, this is the canonical working copy)
 - Installed CLI: `~/.local/bin/chromebook-fixer` (+ `chromebook-fixer-gui`)
 - On the Slate: `~/chromebook-fixer`

@@ -1,6 +1,6 @@
 [Unit]
 Description=Chromebook EC volume-button recovery (polls the EC event FIFO)
-Documentation=https://github.com/thewraith420/chromebook-linux-fixer
+Documentation=https://github.com/thewraith420/nightfall-toolkit
 # Only meaningful once the EC chardev exists.
 ConditionPathExists=/dev/cros_ec
 

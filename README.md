@@ -77,8 +77,8 @@ hardware automatically.
 ## Installing
 
 ```
-git clone https://github.com/thewraith420/chromebook-linux-fixer.git
-cd chromebook-linux-fixer
+git clone https://github.com/thewraith420/nightfall-toolkit.git
+cd nightfall-toolkit
 ./install.sh          # per-user: symlinks into ~/.local/bin, adds a menu entry
 chromebook-fixer status
 ```

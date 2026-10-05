@@ -74,7 +74,7 @@ cd "$WORK"
 # release asset and checksum-verified. Cache it in $WORK so re-runs skip the
 # download. To reproduce fully offline, drop $LC_TARBALL into $WORK yourself.
 LC_TARBALL="libcamera_0.7.0.orig.tar.gz"
-LC_URL="https://github.com/thewraith420/chromebook-linux-fixer/releases/download/libcamera-src-0.7.0/$LC_TARBALL"
+LC_URL="https://github.com/thewraith420/nightfall-toolkit/releases/download/libcamera-src-0.7.0/$LC_TARBALL"
 LC_SHA256="ebd90a3aa2ca87a39323ffb7a4f5bbf72090b43a2431133759620b63e982db87"
 if [ ! -d libcamera-src ]; then
     if [ ! -f "$LC_TARBALL" ]; then

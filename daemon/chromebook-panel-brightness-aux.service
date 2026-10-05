@@ -1,6 +1,6 @@
 [Unit]
 Description=Chromebook eDP panel brightness over DPCD/AUX (mirrors sysfs backlight)
-Documentation=https://github.com/thewraith420/chromebook-linux-fixer
+Documentation=https://github.com/thewraith420/nightfall-toolkit
 # Pointless before the panel's AUX channel exists.
 ConditionPathExistsGlob=/dev/drm_dp_aux*
 
