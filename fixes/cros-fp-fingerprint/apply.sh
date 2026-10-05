@@ -20,6 +20,33 @@ if [ -z "${FIXER_BUILD_ONLY:-}" ]; then
     [ -e /dev/cros_fp ] || { echo "no /dev/cros_fp on this machine"; exit 1; }
 fi
 
+# -- system prerequisites --------------------------------------------------
+# Checked before the Rust download, so a system without git or a C linker fails
+# here rather than after several hundred MB. One apt call under one $SUDO, as
+# the nightfall fix does; a build check never installs anything.
+MISSING_PKGS=""
+command -v git       >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS git"
+command -v curl      >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS curl"
+command -v cc        >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS build-essential"
+command -v dbus-send >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS dbus-bin"
+if [ -n "$MISSING_PKGS" ]; then
+    if [ -n "${FIXER_BUILD_ONLY:-}" ]; then
+        echo "build-only: cannot check the build, missing:$MISSING_PKGS"
+        exit 2
+    fi
+    if ! command -v apt-get >/dev/null 2>&1; then
+        echo "missing, and this is not an apt system - install yourself:$MISSING_PKGS"
+        exit 1
+    fi
+    echo "installing missing prerequisites:$MISSING_PKGS"
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $MISSING_PKGS || {
+        echo "could not install:$MISSING_PKGS"
+        echo "  sudo apt install$MISSING_PKGS"
+        echo "Nothing was changed."
+        exit 1
+    }
+fi
+
 # -- toolchain -------------------------------------------------------------
 # rustup-init is fetched over HTTPS from static.rust-lang.org and checked against
 # the .sha256 published beside it before anything runs. Never curl | sh. Installed
