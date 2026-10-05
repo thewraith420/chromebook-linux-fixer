@@ -1,45 +1,51 @@
-# chromebook-fixer
+# nightfall-toolkit
 
-Nightfall Boot Manager, and hardware enablement fixes for Chromebooks running
-Linux.
+Install, update and manage [Nightfall Boot
+Manager](https://github.com/thewraith420/nightfall-boot-manager) from the
+desktop, plus hardware fixes for running Linux on a Google Pixel Slate.
 
-Two jobs, one tool. It installs and configures [Nightfall Boot
-Manager](https://github.com/thewraith420/nightfall-boot-manager) — the touch
-boot manager this machine starts on — and it carries the hardware fixes below.
-The GUI opens on Nightfall, with the fixes one level down; the CLI treats them
-as equals.
+**Nightfall** is a touch boot manager. It starts before your Linux system,
+boots your kernels with `kexec`, lets you edit their command lines, installs
+and removes kernels, and carries a repair menu. It runs on any x86-64 PC with
+GRUB, driven by touch, keyboard or mouse. This toolkit installs it, keeps it up
+to date, and handles the everyday management that would otherwise mean
+rebooting into it: kernels, boot settings, per-kernel command lines and
+backups.
 
-Chromebooks are good hardware that Linux distributions support badly. The
-cameras, sensors, audio and power behaviour tend to depend on data that lives in
-ChromeOS firmware blobs, vendor kernel trees, or nowhere at all. This tool
-collects the fixes for that, and — importantly — can tell you whether each one
-is actually needed on your machine before it changes anything.
+**The hardware fixes** make a Pixel Slate (Nocturne) work properly under
+Linux: the IPU3 cameras, screen rotation and brightness, the fingerprint reader
+in the power button, audio, the volume buttons, and Waydroid. Each fix checks
+whether this machine actually has the problem before it changes anything.
+
+> **The command is still called `chromebook-fixer`.** The project was renamed
+> from `chromebook-linux-fixer` on 2026-10-05. The commands, the menu entry and
+> the app's own labels keep the old name for now; renaming them is planned.
+> GitHub forwards the old repository address, so existing copies keep updating.
 
 ---
 
 ## ⚠ Read this before using it
 
-**This tool makes low-level changes to your system.**
+**This tool makes low-level changes to your system.** Depending on what you
+apply, that can mean adding a boot entry, replacing system libraries, editing
+udev rules or PAM configuration, or changing kernel behaviour.
 
-Depending on the fix, that can mean replacing system libraries, editing udev
-rules, patching files owned by other packages, or changing kernel behaviour.
+**Nightfall** is offered on any PC with GRUB and a CPU that meets
+**x86-64-v2** (roughly 2009 or newer). Installing it refuses on an older CPU
+before changing anything, because its kernel would not start there. It adds
+its own GRUB entry and leaves your existing entries as they are. It has been
+run end to end on two machines, a Pixel Slate and a Lenovo LOQ, so treat
+anything else as untested.
 
-Some of these fixes touch hardware that is poorly supported on Linux. **A bad
-interaction can hard lock the machine**, requiring a forced power-off — which
-can corrupt a filesystem or lose unsaved work. That is not hypothetical: the
-IPU3 camera work behind this tool locked the reference machine solid three
-times, with no kernel panic and nothing written to any log.
+**The hardware fixes** are developed and tested on exactly one machine, the
+Pixel Slate. Every fix checks for its hardware first, but detection is
+imperfect, and other machines differ in ways nobody here has seen.
 
-**It is developed and tested on exactly one machine** (Google Nocturne, the
-Pixel Slate). Every fix is gated on hardware detection, but detection is
-imperfect and your hardware will differ in ways the author has never seen.
-
-The one exception is **Nightfall Boot Manager**, which is not tied to a
-Chromebook: it is offered on any PC with GRUB and a CPU that meets
-**x86-64-v2** (roughly 2009 or newer), driven by touch, keyboard or mouse, and
-`apply` refuses on an older CPU before changing anything. It has been run
-end to end on two machines — the Pixel Slate and a Lenovo LOQ — and nothing
-else, so treat any other hardware as untested.
+Some of those fixes touch hardware that Linux supports poorly. **A bad
+interaction can hard-lock the machine**, needing a forced power-off that can
+corrupt a filesystem or lose unsaved work. That is not hypothetical: the IPU3
+camera work behind this tool locked the Pixel Slate solid three times, with no
+kernel panic and nothing written to any log.
 
 **There is no warranty.** You are responsible for your own machine.
 
@@ -47,30 +53,10 @@ Sensible precautions:
 
 - Read what a fix does first: `chromebook-fixer list -v`
 - Save your work before applying anything marked **HIGH RISK**
-- Prefer applying one fix at a time over `--all`
-- Check `reverts_cleanly` — a few fixes cannot be cleanly undone
+- Apply one fix at a time rather than `--all`
+- Check `reverts_cleanly`: a few fixes cannot be cleanly undone
 
-You will be asked to acknowledge this once, before the first `apply`.
-
-## Getting the hardware ISP working (IPU3 cameras)
-
-The short version: **you do not need to rebuild a kernel.**
-
-```
-chromebook-fixer apply ipu3-imgu-iommu   # adds iommu=pt
-sudo reboot
-chromebook-fixer apply ipu3-camera       # now builds the HARDWARE path
-```
-
-The IPU3 hardware ISP only needs its device placed in an IOMMU passthrough
-domain, and a boot parameter does that. A per-device kernel quirk is tidier and
-needs no parameter, but it is an optimisation, not a requirement.
-
-Order matters. Applying `ipu3-camera` on a machine whose ImgU is still in a
-translated domain gets you the **software ISP** — which works, and cannot lock
-the machine, but costs most of a CPU core and has no autofocus. The tool warns
-you before that happens, and re-running after the IOMMU fix switches to
-hardware automatically.
+You are asked to acknowledge this once, before your first `apply`.
 
 ---
 
@@ -79,105 +65,190 @@ hardware automatically.
 ```
 git clone https://github.com/thewraith420/nightfall-toolkit.git
 cd nightfall-toolkit
-./install.sh          # per-user: symlinks into ~/.local/bin, adds a menu entry
+./install.sh          # per-user: links into ~/.local/bin and adds a menu entry
 chromebook-fixer status
 ```
 
-`install.sh` prints the exact next step if `~/.local/bin` isn't on your `PATH`
-yet (common on a fresh Ubuntu) — in short, open a new terminal, or run
-`export PATH="$HOME/.local/bin:$PATH"`, then re-run the command.
+If `~/.local/bin` is not on your `PATH` yet (common on a fresh Ubuntu),
+`install.sh` says so. Open a new terminal, or run
+`export PATH="$HOME/.local/bin:$PATH"`, then run the command again.
 
-No root is needed to install. The tool asks for privileges per fix, only when a
-fix actually needs them, so there is no reason to install it as root. Running
-from a clone without installing works too - every path is resolved relative to
-the repository.
+Installing needs no root. The tool asks for privileges only when a step needs
+them, and batches each fix's root work into a single prompt. You can also run
+it straight from the clone without installing.
 
-`./uninstall.sh` removes the symlinks and the menu entry. It deliberately does
-*not* revert applied fixes; use `chromebook-fixer revert <id>` for those.
+`./uninstall.sh` removes the links and the menu entry. It does **not** undo
+applied fixes; use `chromebook-fixer revert <id>` for those.
+
+The app is in your menu as **Nightfall Boot Manager — Chromebook Fixer**. It
+opens on Nightfall, with the hardware fixes one level down.
 
 ---
 
-## Usage
+## Nightfall
+
+Install it, and optionally make it the default GRUB entry:
+
+```
+chromebook-fixer apply nightfall
+chromebook-fixer apply nightfall-default
+```
+
+Installing builds Nightfall's touch UI and boot image on this machine, because
+they bundle this machine's own tools and libraries. It downloads the newest
+Nightfall kernel from BobZKernel's releases and checks it against the
+published `SHA256SUMS`. Missing build tools are installed with apt.
+
+### Settings
+
+```
+chromebook-fixer boot-menu                                # every boot setting, current values
+chromebook-fixer boot-menu --nightfall 20                 # Nightfall's menu timeout, seconds
+chromebook-fixer boot-menu --grub 5                       # GRUB's own menu timeout
+chromebook-fixer boot-menu --rotate 90 --autorotate off   # starting rotation; follow the accelerometer or not
+chromebook-fixer boot-menu --splash off --splash-secs 0.5 # boot screens on/off, minimum time each stays up
+```
+
+### Kernels
+
+```
+chromebook-fixer kernels                                  # installed kernels, and Nightfall's default
+chromebook-fixer kernels --install <tarball> [--set-default]  # install a BobZKernel portable-installer tarball
+chromebook-fixer kernels --default <release>              # make Nightfall boot this one first
+chromebook-fixer kernels --remove <release>               # asks you to type the release first
+chromebook-fixer kernels --cmdline <release>              # the saved command line, or GRUB's own if none
+chromebook-fixer kernels --cmdline <release> --set "..."  # save a command line for this kernel
+chromebook-fixer kernels --cmdline <release> --reset      # drop it; fall back to GRUB's entry
+```
+
+`kernels` also lists leftovers: module folders with no kernel, packages apt
+removed but never purged, and saved command lines for kernels that are gone.
+Each can be removed like a kernel. Removal refuses the running kernel and the
+last remaining one.
+
+Saved command lines are the same `/boot/nightfall-cmdline` file Nightfall's
+own Edit screen writes. They affect boots through Nightfall only; GRUB's own
+entries stay as they are. Saving refuses a line that is empty, has no `root=`,
+or contains a tab. In the GUI, each kernel's **Cmdline…** button opens the
+same editor.
+
+### Backups
+
+```
+chromebook-fixer backups                                  # Nightfall's backups, on any mounted drive
+chromebook-fixer backups --delete <name>                  # asks you to type the name first
+```
+
+Nightfall takes backups on the Pixel Slate only for now, so the GUI shows this
+section there, or on any machine where backups already exist.
+
+Taking and restoring a backup stay in Nightfall, which does them with the real
+system mounted read-only. Doing either from the running system would copy it
+mid-write or overwrite it while in use. This toolkit only lists and deletes,
+including incomplete backups Nightfall's own list hides, which are often the
+biggest thing on the drive.
+
+### Updates
+
+```
+chromebook-fixer update                  # is anything behind? changes nothing
+chromebook-fixer update fixer            # update this toolkit
+chromebook-fixer update nightfall        # newest Nightfall source and kernel, rebuilt and reinstalled
+```
+
+- **Nothing is merged or overwritten.** Both git checkouts update
+  fast-forward only. A checkout with local changes or unpushed commits is
+  refused, with the reason.
+- **"Behind" means behind what is installed.** Nightfall counts as behind when
+  the installed build came from an older commit than the Nightfall checkout
+  holds, even if nothing new is on GitHub yet. The installed commit is
+  recorded in `/boot/nightfall/source-sha`. A build installed before that file
+  existed shows as `(unrecorded)` until its next update.
+- **The previous kernel is kept.** `update nightfall` keeps the kernel and boot
+  image it replaces as `vmlinuz.previous` and `initramfs.img.previous`, as a
+  matched pair. To go back, copy them over the live files from Nightfall's
+  shell or a rescue boot.
+- **Panel options are your call.** If Nightfall's entry carries `i915.*`
+  options this boot lacks, the update stops instead of silently dropping them.
+  The GUI then asks **Keep them** or **Drop them**. On the command line:
+  `update nightfall --nightfall-cmdline "<options>"` keeps them, and
+  `--nightfall-cmdline ""` drops them.
+
+The GUI checks for updates in the background each time it opens, and shows an
+**Updates** section only when something is behind.
+
+---
+
+## Hardware fixes (Pixel Slate)
 
 ```
 chromebook-fixer status          # what this machine needs
-chromebook-fixer list -v         # every known fix, with descriptions
+chromebook-fixer list -v         # every fix, with what it does and its risks
 chromebook-fixer apply <id>      # install one
 chromebook-fixer verify <id>     # is it still working?
 chromebook-fixer revert <id>     # undo it
+chromebook-fixer logs [<id>]     # a fix's own log, for those that keep one
+chromebook-fixer selftest [<id>] # check the from-source fixes still build; installs nothing
 
 chromebook-fixer apply --kernel list        # which kernels are installed
 chromebook-fixer apply <id> -k <version>    # target a specific kernel
 ```
 
-`--kernel` matters only for fixes that build or replace kernel modules;
-everything else ignores it. It is useful when the kernel you are running has no
-headers but another installed kernel does — you can build for that one, and the
-fix takes effect when you boot it. The tool says so explicitly rather than
-quietly producing a module that will not load.
+Nothing is applied unless you name it (or pass `--all`) **and** the fix's own
+detection says the problem is present on this machine. High-risk fixes make
+you type the fix id to confirm, because a `y/N` prompt is too easy to answer by
+reflex for something that can lock the machine.
 
-Nothing is applied unless you ask for it by name (or pass `--all`), **and** the
-fix's own detection says the problem is actually present on this machine.
+`--kernel` matters only for fixes that build kernel modules. It helps when the
+running kernel has no headers but another installed one does: you build for
+that one, and the fix takes effect when you boot it.
 
-High-risk fixes require you to type the fix id to confirm. A `y/N` prompt is too
-easy to answer by reflex for something that can lock the machine.
+### What is covered
 
-### Nightfall
+21 fixes. Apart from Nightfall, they are matched to Chromebook hardware.
+
+**Camera:** `camera-orientation`, `ipu3-camera`, `ipu3-imgu-grableak`, `ipu3-imgu-iommu`, `ipu3-vcm-focus`
+
+**Screen, brightness and rotation:** `accelerometer-orientation`, `backlight-permissions`, `display-autorotate`, `panel-brightness-aux`, `panel-brightness-dpcd`, `tablet-mode-switch`
+
+**Audio:** `audio-avs-dsp`
+
+**Buttons and sensors:** `ec-buttons-poll`, `touch-resume-rebind`
+
+**Login and security:** `cros-fp-fingerprint`
+
+**Booting and recovery:** `nightfall`, `nightfall-default`
+
+**Android (Waydroid):** `waydroid-lxc-hook`, `waydroid-netfilter`, `waydroid-usb`
+
+**System and performance:** `zram-swap`
+
+Two of these exist nowhere else as far as I know: the IPU3 camera stack, and a
+bridge that makes the fingerprint reader in the power button work with GNOME's
+lock screen. The fingerprint fix builds from source; if Rust is not installed,
+it installs it for your user only (checksum-verified, no root), removable later
+with `rustup self uninstall`.
+
+On another Chromebook, most fixes should simply report "not needed". That is
+reasoning, not evidence: only the Pixel Slate has been tested.
+
+### Getting the IPU3 cameras working
+
+**You do not need to rebuild a kernel.**
 
 ```
-chromebook-fixer boot-menu                              # every boot setting, current values
-chromebook-fixer boot-menu --nightfall 20                # Nightfall's menu timeout, seconds
-chromebook-fixer boot-menu --grub 5                       # GRUB's own menu timeout
-chromebook-fixer boot-menu --rotate 90 --autorotate off   # starting rotation, follow the accelerometer or not
-chromebook-fixer boot-menu --splash off --splash-secs 0.5 # boot screens on/off, minimum time each stays up
-
-chromebook-fixer kernels                                 # installed kernels, and Nightfall's default
-chromebook-fixer kernels --install <tarball> [--set-default]  # install a BobZKernel portable-installer tarball
-chromebook-fixer kernels --default <release>              # make Nightfall boot this one first
-chromebook-fixer kernels --remove <release>                # asks for the release to be typed first
-chromebook-fixer kernels --cmdline <release>               # show the saved override, or GRUB's own entry if none
-chromebook-fixer kernels --cmdline <release> --set "..."   # save a per-kernel boot command line
-chromebook-fixer kernels --cmdline <release> --reset       # drop the override, fall back to GRUB's entry
-
-chromebook-fixer backups                                  # backups Nightfall has taken, on any mounted drive
-chromebook-fixer backups --delete <name>                   # asks for the name to be typed first
-
-chromebook-fixer update                                   # is the fixer, Nightfall or its kernel behind? changes nothing
-chromebook-fixer update fixer                             # fast-forward this tool's own checkout
-chromebook-fixer update nightfall                         # pull Nightfall's source, fetch the newest kernel, rebuild, replace in place
+chromebook-fixer apply ipu3-imgu-iommu   # adds iommu=pt
+sudo reboot
+chromebook-fixer apply ipu3-camera       # now builds the hardware path
 ```
 
-**Updates.** `update` with no target only looks. Both git checkouts are
-updated fast-forward only and are refused, with the reason, when they have local
-changes or unpushed commits — nothing is merged or overwritten. `update
-nightfall` replaces `/boot/nightfall` in place and keeps the kernel it replaces
-(and its initramfs, as a matched pair) as `vmlinuz.previous` /
-`initramfs.img.previous`; a reinstall of the same kernel leaves an existing
-rollback pair alone. To go back, copy the two `.previous` files over the live
-ones from Nightfall's shell or a rescue boot. The GUI checks once when it
-opens, in the background, and shows an **Updates** section only when something
-is behind; an offline machine sees nothing extra.
+The IPU3's hardware image processor only needs its device in an IOMMU
+passthrough domain, and a boot parameter does that.
 
-Nightfall itself installs the kernel it boots into and — on the Pixel Slate
-(Nocturne) only — takes and restores backups, from its own environment with the real root mounted read-only — neither
-of those is safe to do from the running system, so the fixer does not attempt
-either. What it adds is the part that is otherwise a reboot into the touch UI
-just to check: seeing what is installed, freeing space, and changing settings
-that live as small files on `/boot`.
-
-**Per-kernel command-line overrides** — Nightfall's own `/boot/nightfall-cmdline`,
-previously editable only from its touch UI at boot — can now be read and
-written from here too, in the CLI (above) and from a **Cmdline…** button on
-each kernel row in the GUI, which opens a wrapping multi-line field (a real
-cmdline is long enough that a single-line entry just scrolls) with **Cancel**,
-**Clear Saved** (back to GRUB's own entry; shown only when an override is
-saved) and **Save**. A missing override falls back to GRUB's own entry for
-that kernel, unchanged; setting one is refused if it is empty, has no `root=`,
-or contains a literal tab. Removing a kernel (every path, including a
-leftover module tree or a kernel already gone from both `/boot` and dpkg)
-prunes its line automatically; a line whose kernel is already gone shows up in
-`kernels` as its own orphan row, with a Remove button of its own, same as
-orphaned module trees.
+Order matters. Applying `ipu3-camera` first gets you the **software** image
+processor, which works and cannot lock the machine, but uses most of a CPU core
+and has no autofocus. The tool warns you before that happens, and re-running it
+after the IOMMU fix switches to hardware automatically.
 
 ---
 
@@ -194,25 +265,22 @@ Each fix is a directory under `fixes/` with a `fix.yaml` and up to four scripts:
 
 **`detect` and `verify` answer different questions**, and keeping them apart is
 deliberate. "The problem exists" and "our fix is installed" are not the same
-thing — conflating them means you cannot notice that a distro update fixed
+thing. Conflating them means you cannot notice that a distro update fixed
 something upstream, or that a package upgrade silently clobbered your fix.
 
 **Exit 3 exists because "the machine is fine" is not the same as "we fixed
-it".** The IPU3 IOMMU fix found this the hard way: mainline carries a VT-d quirk
+it".** The IPU3 IOMMU fix found this the hard way. Mainline carries a VT-d quirk
 that puts the Intel IPU in a passthrough domain by itself, so on a stock kernel
-the fix's `verify` saw a safe `identity` domain and reported **applied** — on a
-machine whose bootloader it had never touched. A user reading that would believe
-a boot parameter had been added when none had. Exit 3 reports *not needed*
+the fix's `verify` saw a safe `identity` domain and reported **applied**, on a
+machine whose bootloader it had never touched. Exit 3 reports *not needed*
 instead, and leaves Apply disabled, since there is nothing to add.
 
-Write `verify` to check **the thing your fix installs** — your file, your
-marker, your parameter — not the symptom being gone. Where the symptom can also
+Write `verify` to check **the thing your fix installs** (your file, your
+marker, your parameter), not the symptom being gone. Where the symptom can also
 vanish on its own, say so with exit 3.
 
-Fixes are grouped by category in both the CLI and the GUI. A flat list of
-twenty-one entries reads as a wall of hardware jargon, and people open this tool
-because one specific thing is broken - so `category` decides which heading a
-fix appears under:
+`category` in `fix.yaml` decides which heading a fix appears under, in both the
+CLI and the GUI:
 
 | category | heading |
 |---|---|
@@ -222,25 +290,11 @@ fix appears under:
 | `input` | Buttons and sensors |
 | `security` | Login and security |
 | `android` | Android (Waydroid) |
-| `boot` | (see below) |
+| `boot` | Booting and recovery (in the GUI: under Nightfall) |
 | `system` | System and performance |
 
 Anything unrecognised falls under **Other**, which is a prompt to add a
 category rather than a place to leave things.
-
-The GUI is one level deeper than that table suggests, and organised around
-what you use daily rather than what is merely installed. Home opens with
-Machine Specs, a single **Hardware fixes** row (carrying the count of
-anything needing attention, whichever category it is in) and GRUB — the
-fallback bootloader underneath everything. Below that, one heading size
-larger since everything from there down belongs to it, is Nightfall Boot
-Manager: **Install Nightfall** (the two `boot` fixes — installing it,
-making it GRUB's default), its settings, installed **Kernels** (view, remove,
-install one from a tarball, choose Nightfall's default), and its **Backups**
-(Slate/Nocturne only, or wherever backups already exist: view, delete —
-taking and restoring stay in Nightfall itself; see
-[Nightfall](#nightfall) above). The CLI is unaffected: it still groups every
-fix, `boot` included, under the headings above.
 
 `fix.yaml` declares metadata and, crucially, hazards:
 
@@ -266,11 +320,11 @@ target a family without enumerating every spelling.
 Guidelines that matter more than they look:
 
 - **Resolve devices by name, never by number.** `/dev/v4l-subdev*` numbering is
-  not stable across reboots — it moved twice in one day on the reference
-  machine and produced wrong readings both times. Use `lib/find-subdev.sh`.
+  not stable across reboots. It moved twice in one day on the Pixel Slate and
+  produced wrong readings both times. Use `lib/find-subdev.sh`.
 - **Detect the actual condition, not the hardware.** "This is a Nocturne" is a
   weak reason to change something; "this kernel cannot load `ip_tables` and
-  waydroid's script requires it" is a good one.
+  Waydroid's script requires it" is a good one.
 - **Back up before overwriting**, and make `revert` restore from that backup.
 - **Kernel-level fixes should be detect-only.** Ship the patch, detect whether
   the running kernel has it, and tell the user. A tool that rewrites your
@@ -278,30 +332,26 @@ Guidelines that matter more than they look:
 - **Beware `cmd | grep -q` under `set -o pipefail`.** `grep -q` exits at the
   first match, the producer takes SIGPIPE, and pipefail then reports the whole
   pipeline as failed *even though the match succeeded*. This silently made a
-  verify script misreport which ISP was in use. Capture output to a variable
-  first, then match against it.
-- **Escalate with `$SUDO`, never a bare `sudo`.** The CLI exports `FIXER_SUDO`
-  and every script starts with `SUDO="${FIXER_SUDO:-sudo}"`. In a terminal that
-  resolves to plain `sudo`. Under the GUI, which has no controlling terminal,
-  it becomes `pkexec`, so the desktop's polkit agent authenticates however the
-  machine is set up to — on a Chromebook that means the fingerprint reader
-  rather than a password box. Where there is no graphical session to show a
-  polkit prompt it falls back to `sudo -A` with an askpass helper. A bare
-  `sudo` under the GUI dies with *"sudo: A terminal is required to
-  authenticate"*, and setting `SUDO_ASKPASS` on its own does not save you,
-  because sudo consults that variable only under `-A`. This applies to shared
-  library code too — `lib/kernel-cmdline.sh` is sourced by every cmdline fix,
-  so one bare `sudo` in it breaks all of them at once.
-- **Keep `$SUDO` out of pipelines.** `echo x | $SUDO tee f` runs the escalation
-  in a forked subshell. With no tty sudo caches its credential per *parent
-  process*, so each pipeline prompts again. Write to a temp file and
-  `$SUDO install` it, or use `$SUDO tee f <<< "x"`.
+  verify script misreport which image processor was in use. Capture output to
+  a variable first, then match against it.
+- **Escalate with `$SUDO`, never a bare `sudo`.** Every script starts with
+  `SUDO="${FIXER_SUDO:-sudo}"`. In a terminal that is plain `sudo`. Under the
+  GUI, which has no terminal, it becomes `pkexec`, so the desktop's polkit
+  agent authenticates however the machine is set up to: on a Pixel Slate, the
+  fingerprint reader. A bare `sudo` under the GUI dies with *"sudo: A terminal
+  is required to authenticate"*. This applies to shared library code too:
+  `lib/kernel-cmdline.sh` is used by every command-line fix, so one bare
+  `sudo` in it breaks all of them.
 - **Batch root work into a single `$SUDO`.** pkexec's polkit action is
-  `auth_admin`, not `auth_admin_keep` — there is no credential cache, so every
-  `$SUDO` in a script is another authentication prompt. One since-removed DKMS
-  fix fired nine of them, spread across a build that takes minutes. Put the
-  whole privileged sequence in one `$SUDO bash -s -- "$A" "$B" <<'ROOT'`
-  heredoc instead.
+  `auth_admin`, not `auth_admin_keep`, so there is no credential cache: every
+  `$SUDO` is another authentication prompt. One since-removed fix fired nine,
+  spread across a build that takes minutes. Put the whole privileged sequence
+  in one `$SUDO bash -s -- "$A" "$B" <<'ROOT'` block.
+- **Keep `$SUDO` out of pipelines.** `echo x | $SUDO tee f` escalates in a
+  forked subshell, which can prompt again. Write to a temp file and
+  `$SUDO install` it, or use `$SUDO tee f <<< "x"`.
+- **Never assume `/usr/sbin` is on `PATH`.** Debian does not put it there for a
+  normal user, so `command -v kexec` fails even when kexec is installed.
 - **Write the `danger` field from experience.** Generic caution teaches nobody
   anything; "this locked the machine three times and left the boot filesystem
   dirty" tells someone exactly how much care to take.
@@ -309,62 +359,36 @@ Guidelines that matter more than they look:
 ## Layout
 
 ```
-bin/chromebook-fixer     CLI
-lib/registry.py          fix discovery, DMI matching, lifecycle
-lib/find-subdev.sh       resolve media entities to device nodes by name
-fixes/<id>/              one directory per fix
-kernel/                  kernel patches (shipped, not applied)
+bin/chromebook-fixer       CLI
+bin/chromebook-fixer-gui   GTK4 / libadwaita app
+lib/registry.py            fix discovery, DMI matching, lifecycle
+lib/updates.sh             update checks and fast-forward pulls
+lib/kernels.sh             kernel listing, install, removal, command lines
+lib/nightfall-backups.sh   Nightfall backup listing and deletion
+lib/boot-menu.sh           Nightfall and GRUB boot settings
+lib/find-subdev.sh         resolve media devices by name
+fixes/<id>/                one directory per fix
+daemon/                    background helpers some fixes install
+kernel/                    kernel patches (shipped, not applied)
+tests/                     fixture-only tests, run in CI; no root or real hardware
 ```
-
-## What is covered
-
-21 fixes at present, grouped by the part of the machine they concern:
-
-**Camera** — `camera-orientation`, `ipu3-camera`, `ipu3-imgu-grableak`, `ipu3-imgu-iommu`, `ipu3-vcm-focus`
-
-**Screen, brightness and rotation** — `accelerometer-orientation`, `backlight-permissions`, `display-autorotate`, `panel-brightness-aux`, `panel-brightness-dpcd`, `tablet-mode-switch`, `touch-resume-rebind`
-
-**Audio** — `audio-avs-dsp`
-
-**Buttons and sensors** — `ec-buttons-poll`
-
-**Login and security** — `cros-fp-fingerprint`
-
-**Booting and recovery** — `nightfall`, `nightfall-default`
-
-**Android (Waydroid)** — `waydroid-lxc-hook`, `waydroid-netfilter`, `waydroid-usb`
-
-**System and performance** — `zram-swap`
-
-Everything here was developed against a **Google Nocturne (Pixel Slate)**, which
-is the only machine it has been tested on. Fixes gate themselves on hardware
-detection, so running this on another Chromebook should be uneventful - most
-will simply report "not needed" - but that is reasoning, not evidence.
-
-Several of these are not available anywhere else as far as I can tell: the IPU3
-camera stack, and a bridge that makes the fingerprint reader in the power button
-work with GNOME's lock screen. Others are one-line settings that took a long
-time to find.
 
 ## Status
 
-Usable. CLI and GTK4 front end, hardware matching, category navigation, and a
-verified install path. The fix format is designed so that adding a machine is
-data plus a detect script rather than a rewrite.
+Usable, and used daily on a Pixel Slate. Two things to know before you rely on
+it:
 
-Two things worth knowing before you rely on it:
-
-- **It is tested on one machine.** Detection is written to be conservative, but
-  your hardware will differ in ways I have never seen.
-- **Some fixes touch things that can hard lock a machine.** That is documented
-  per fix in the `danger` field, written from what actually happened rather
-  than from generic caution.
+- **It is tested on very few machines.** Nightfall on two, the hardware fixes
+  on one. Detection is written to be conservative, but your hardware will
+  differ in ways nobody here has seen.
+- **Some fixes can hard-lock a machine.** That is documented per fix in the
+  `danger` field, written from what actually happened.
 
 ## Licence
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-Contributions are welcome, particularly for models other than the Pixel Slate.
-The fix format is designed so that adding a machine is data plus a detect
-script rather than a rewrite - see **Writing a fix** above, and please write
-the `danger` field from something you actually observed.
+Contributions are welcome, particularly fixes for machines other than the
+Pixel Slate. Adding a machine is data plus a detect script rather than a
+rewrite: see **Writing a fix** above, and please write the `danger` field from
+something you actually observed.
