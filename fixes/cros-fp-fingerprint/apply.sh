@@ -142,10 +142,25 @@ if [ -n "${FIXER_BUILD_ONLY:-}" ]; then
 fi
 
 # -- install ---------------------------------------------------------------
-$SUDO install -d /usr/local/libexec
-$SUDO install -m755 "$BIN" /usr/local/libexec/fprintd-shim
+# Every privileged step, in one escalation: under the GUI each $SUDO is a
+# separate polkit password prompt (auth_admin, no credential cache), and this
+# used to ask eight times. The unit file is written by a heredoc inside the
+# root script; the service check and the suspend hook keep their order, so a
+# service that fails to start stops the run before the hook is installed.
+#
+# The wake-from-suspend hook arms the sensor right before suspend and cleans
+# up right after, so a touch while asleep can wake the machine. It relies on
+# the disconnect-cleanup in the shim: the hook kills its own armed verify
+# process on resume, and the shim releases the claim when that connection
+# drops, so GNOME's own lock-screen verify is never left blocked behind it.
+$SUDO bash -s -- "$BIN" "$FIX_DIR/suspend-hook/chromebook-fp-wake" <<'ROOT'
+set -e
+BIN="$1"; HOOK="$2"
 
-$SUDO tee /etc/systemd/system/fprintd-shim.service >/dev/null <<'UNIT'
+install -d /usr/local/libexec
+install -m755 "$BIN" /usr/local/libexec/fprintd-shim
+
+tee /etc/systemd/system/fprintd-shim.service >/dev/null <<'UNIT'
 [Unit]
 Description=fprintd-compatible bridge for the ChromeOS fingerprint MCU
 After=dbus.service
@@ -167,10 +182,10 @@ UNIT
 
 # Only one process may own net.reactivated.Fprint, and fprintd is D-Bus
 # activated, so it would race us at every login.
-$SUDO systemctl stop fprintd.service 2>/dev/null || true
-$SUDO systemctl mask fprintd.service
-$SUDO systemctl daemon-reload
-$SUDO systemctl enable --now fprintd-shim.service
+systemctl stop fprintd.service 2>/dev/null || true
+systemctl mask fprintd.service
+systemctl daemon-reload
+systemctl enable --now fprintd-shim.service
 sleep 3
 
 if ! systemctl is-active --quiet fprintd-shim.service; then
@@ -179,19 +194,9 @@ if ! systemctl is-active --quiet fprintd-shim.service; then
     exit 1
 fi
 
-# -- wake-from-suspend on a touch -------------------------------------------
-#
-# The sensor's own ACPI/kernel wakeup attributes are already enabled on this
-# hardware, but GNOME only arms the sensor while its own unlock dialog is
-# actively waiting - it does not stay armed through a whole suspend. This
-# hook arms it right before suspend and cleans up right after, so a touch
-# while asleep can wake the machine. It relies on the disconnect-cleanup
-# above: the hook kills its own armed verify process on resume, and the
-# shim releases the claim when that connection drops, so GNOME's own
-# lock-screen verify is never left blocked behind it.
-$SUDO install -m755 "$FIX_DIR/suspend-hook/chromebook-fp-wake" \
-    /usr/lib/systemd/system-sleep/chromebook-fp-wake
+install -m755 "$HOOK" /usr/lib/systemd/system-sleep/chromebook-fp-wake
 echo "installed the wake-on-touch suspend hook"
+ROOT
 
 echo
 echo "running. Enrol a finger with:"
