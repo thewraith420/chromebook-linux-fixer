@@ -637,6 +637,7 @@ class Window(Adw.ApplicationWindow):
         # Remove and its "Active" stand-in share one width, so every row's
         # last button lines up.
         last_slot = self._kernel_slot_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        first_slot = self._kernel_first_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         for release, size, package, flags, kind in entries:
             size = int(size) if size.isdigit() else 0
             human = (f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB")
@@ -682,7 +683,14 @@ class Window(Adw.ApplicationWindow):
                     pick = Gtk.Button(label="Set Default", valign=Gtk.Align.CENTER)
                     pick.set_tooltip_text("Make this the kernel Nightfall boots by default")
                     pick.connect("clicked", lambda _b, r=release: self._set_default_kernel(r))
-                    box.append(pick)
+                else:
+                    # Same idea as "Active" below: a status in the button's
+                    # place, so the default kernel's row lines up too.
+                    pick = Gtk.Button(label="Default", valign=Gtk.Align.CENTER,
+                                      sensitive=False)
+                    pick.set_tooltip_text("Nightfall already boots this kernel by default")
+                first_slot.add_widget(pick)
+                box.append(pick)
                 edit = Gtk.Button(label="Cmdline…", valign=Gtk.Align.CENTER)
                 edit.set_tooltip_text("Edit the saved boot command line for this kernel")
                 edit.connect("clicked",
