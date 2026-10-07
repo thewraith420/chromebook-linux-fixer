@@ -552,7 +552,7 @@ class Window(Adw.ApplicationWindow):
         A disabled "Active" (or "Only one") sits in its place instead.
         """
         self._kernels_group = Adw.PreferencesGroup(
-            title="Kernels",
+            title="Manage Kernels",
             description="What is installed, and which one Nightfall boots "
                         "first. Removing one frees its modules and initrd too.")
 
