@@ -185,6 +185,7 @@ class Window(Adw.ApplicationWindow):
 
         self.nav = Adw.NavigationView()
         self.nav.add(self._build_root())
+        self.nav.add(self._nf_settings_nav)
         self.toasts = Adw.ToastOverlay(child=self.nav)
         self.set_content(self.toasts)
         # Now that the page exists, open as tall as it actually is - or as tall
@@ -245,6 +246,8 @@ class Window(Adw.ApplicationWindow):
             tallest = page_height(self._root_page, self._root_groups)
             page, groups, _rows = self._build_fixes_page()
             tallest = max(tallest, page_height(page, groups))
+            tallest = max(tallest, page_height(self._nf_settings_prefs,
+                                               self._nf_settings_groups))
             for key in self.fixes_by_category:
                 page, groups, _rows = self._build_category_page(key, "")
                 tallest = max(tallest, page_height(page, groups))
@@ -340,18 +343,37 @@ class Window(Adw.ApplicationWindow):
         # _refresh_boot_menu should always write to.
         self.boot = handles
         nf_settings, grub_settings = settings[0], settings[1:]
+        # Nightfall's settings sit one level down, behind a single row like
+        # Hardware fixes (Bob, 2026-10-07: they made home too long). Their
+        # page is built once, here, so refresh keeps writing to these handles;
+        # __init__ adds it to the navigation view after home.
+        self._nf_settings_prefs = Adw.PreferencesPage()
+        self._nf_settings_prefs.add(nf_settings)
+        self._nf_settings_groups = [nf_settings]
+        nf_toolbar = Adw.ToolbarView()
+        nf_toolbar.add_top_bar(Adw.HeaderBar())
+        nf_toolbar.set_content(Gtk.ScrolledWindow(child=self._nf_settings_prefs, vexpand=True))
+        self._nf_settings_nav = Adw.NavigationPage(
+            child=nf_toolbar, title="Nightfall settings", tag="nightfall-settings")
+        nf_settings_link = Adw.PreferencesGroup()
+        self._nf_settings_row = Adw.ActionRow(
+            title="Nightfall settings", subtitle="checking…", activatable=True)
+        self._nf_settings_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        self._nf_settings_row.connect(
+            "activated", lambda _r: self.nav.push_by_tag("nightfall-settings"))
+        nf_settings_link.add(self._nf_settings_row)
         kernels = self._build_kernels()
         backups = self._build_backups()
 
         updates = self._build_updates()
         for group in (info, fixes_group, updates, *grub_settings, nf,
-                     nf_settings, kernels, backups):
+                     nf_settings_link, kernels, backups):
             page.add(group)
 
         # Kept so the window can be sized from what is actually on the page.
         self._root_page = page
         self._root_groups = [info, fixes_group, *grub_settings, nf,
-                             nf_settings, kernels, backups]
+                             nf_settings_link, kernels, backups]
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -1248,7 +1270,8 @@ class Window(Adw.ApplicationWindow):
                         "Takes effect on the next boot through it.")
         h["hint"] = Adw.ActionRow(
             title="Nightfall is not installed",
-            subtitle="Install it above - its settings appear here once it is.")
+            subtitle="Install it from the home page first - its settings appear "
+                     "here once it is.")
         nf.add(h["hint"])
 
         # Chosen and then Set rather than applied on change: every change is an
@@ -1328,6 +1351,7 @@ class Window(Adw.ApplicationWindow):
         h["hint"].set_visible(not installed)
         for row in h["nightfall_rows"]:
             row.set_visible(installed)
+        nf_timeout = None
 
         for key, row, spin, note in h["timeout_rows"]:
             if key == "grub":
@@ -1337,6 +1361,7 @@ class Window(Adw.ApplicationWindow):
                 spin.set_value(5 if value is None else value)
             else:
                 value, source = self._nightfall_timeout()
+                nf_timeout = value
                 row.set_subtitle(f"{value}s{self._source_note(source)} — {note}")
                 # Parks on the value in effect, never on 0 for "unset": 0 is a
                 # real and, for Nightfall, dangerous setting.
@@ -1381,6 +1406,17 @@ class Window(Adw.ApplicationWindow):
             h["splash_ms_row"].set_subtitle(
                 f"{secs}{self._source_note(msource)} — does nothing while "
                 f"boot screens are off")
+
+        # The home row's one-line summary of what is behind it.
+        if not installed:
+            summary = "Nightfall is not installed yet"
+        else:
+            menu = ("menu waits for a tap" if nf_timeout == 0
+                    else f"{nf_timeout}s menu")
+            summary = (f"{menu} · starts at {rot}° · auto-rotate "
+                       f"{'on' if auto else 'off'} · boot screens "
+                       f"{'on' if splash else 'off'}")
+        self._nf_settings_row.set_subtitle(summary)
 
     def _run_boot_menu(self, flag, value, extra=()):
         cli = CLI
