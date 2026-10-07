@@ -297,13 +297,8 @@ class Window(Adw.ApplicationWindow):
         info = Adw.PreferencesGroup(title="Machine Specs")
         info.add(self._row("Model", self.machine.describe()))
         info.add(self._row("Kernel", self.machine.kernel))
-        if not self.machine.is_chromebook:
-            r = self._row("Warning",
-                          "This does not look like a Chromebook. The hardware fixes "
-                          "are matched on hardware and most will not apply; "
-                          "Nightfall works on any x86-64-v2 PC.")
-            r.add_css_class("warning")
-            info.add(r)
+        # The not-a-Chromebook warning is about the hardware fixes, so it
+        # lives on their page (_build_fixes_page), not on home.
 
         # One row, no group title: the row says what it is, and a heading above
         # a single row reads as an empty section.
@@ -1048,6 +1043,17 @@ class Window(Adw.ApplicationWindow):
         sizing never becomes the copy that refresh writes to.
         """
         page = Adw.PreferencesPage()
+        groups = []
+        if not self.machine.is_chromebook:
+            warn_group = Adw.PreferencesGroup()
+            r = self._row("Not a Chromebook",
+                          "The hardware fixes are matched to Chromebook hardware, "
+                          "so most will not apply here. Nightfall itself works on "
+                          "any x86-64-v2 PC.")
+            r.add_css_class("warning")
+            warn_group.add(r)
+            page.add(warn_group)
+            groups.append(warn_group)
         group = Adw.PreferencesGroup(
             title="Fixes",
             description="Pick the part of the machine you want to look at. "
@@ -1068,7 +1074,8 @@ class Window(Adw.ApplicationWindow):
             group.add(row)
             rows[key] = (row, fixes)
         page.add(group)
-        return page, [group], rows
+        groups.append(group)
+        return page, groups, rows
 
     def _open_fixes(self):
         page, _groups, rows = self._build_fixes_page()
