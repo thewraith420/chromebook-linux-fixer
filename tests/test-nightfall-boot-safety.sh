@@ -32,10 +32,14 @@ expect() {  # expect <name> <exit> <command...>
     else fail=$((fail + 1)); echo "FAIL  $name  (want $want, got $got)"; fi
 }
 # The host's own NIGHTFALL_CMDLINE must not leak into a case that is not about it.
+# NF_CMDLINE_FILE and FIXER_RUNNING_KERNEL pinned too: otherwise the check reads
+# this machine's real /boot/nightfall-cmdline and the result depends on the host.
 check()    { printf '%s\n' "$1" > "$T/cmdline"
-             env -u NIGHTFALL_CMDLINE PICKER_CFG="$T/c.cfg" PROC_CMDLINE="$T/cmdline" "$CHECK"; }
+             env -u NIGHTFALL_CMDLINE PICKER_CFG="$T/c.cfg" PROC_CMDLINE="$T/cmdline" \
+                 NF_CMDLINE_FILE="$T/nightfall-cmdline" FIXER_RUNNING_KERNEL=7.2.8-test "$CHECK"; }
 override() { printf '%s\n' "$1" > "$T/cmdline"
-             env NIGHTFALL_CMDLINE="$2" PICKER_CFG="$T/c.cfg" PROC_CMDLINE="$T/cmdline" "$CHECK"; }
+             env NIGHTFALL_CMDLINE="$2" PICKER_CFG="$T/c.cfg" PROC_CMDLINE="$T/cmdline" \
+                 NF_CMDLINE_FILE="$T/nightfall-cmdline" FIXER_RUNNING_KERNEL=7.2.8-test "$CHECK"; }
 drift()    { printf '%s\n' "$1" > "$T/cmdline"
              PICKER_CFG="$T/c.cfg" PROC_CMDLINE="$T/cmdline" "$KCL" picker-drift; }
 
@@ -64,6 +68,25 @@ expect "ONLY-EMPTY: one-time edit dropped every i915"   3 check "ro quiet splash
 holds_sentinel() { local out; out=$(check "ro quiet splash"); grep -qx "NF_I915_ENTRY=$PANEL" <<<"$out"; }
 expect "ONLY-EMPTY: names the entry's options for the GUI" 0 holds_sentinel
 expect "ONLY-EMPTY: an explicit empty override is accepted" 0 override "ro quiet splash" ""
+
+# A bare boot that is the running kernel's SAVED override is deliberate
+# (nightfall-boot-manager 46d3fd3 accepts it too; both must agree).
+BARE="root=UUID=abc ro quiet splash module_blacklist=hid_google_hammer"
+saved() { printf '%s\n' "$@" > "$T/nightfall-cmdline"; }
+saved "/boot/vmlinuz-7.2.8-test	$BARE"
+expect "SAVED: bare boot equal to this kernel's saved override is accepted" 0 check "$BARE"
+expect "SAVED: GRUB's BOOT_IMAGE= token and extra spaces do not matter"     0 check "BOOT_IMAGE=/boot/vmlinuz-7.2.8-test  $BARE"
+expect "SAVED: a bare boot that differs from the saved override refuses"    3 check "$BARE quiet"
+saved "/boot/vmlinuz-7.2.7-other	$BARE"
+expect "SAVED: a saved line for a different kernel refuses"                 3 check "$BARE"
+saved "/vmlinuz-7.2.8-test	$BARE"
+expect "SAVED: matched by the vmlinuz suffix (separate /boot key form)"     0 check "$BARE"
+saved "/boot/vmlinuz-7.2.8-test	$BARE" "/boot/vmlinuz-7.2.8-test	root=UUID=abc ro other"
+expect "SAVED: last matching line wins"                                     3 check "$BARE"
+saved "/boot/vmlinuz-7.2.8-test	$BARE" "/boot/vmlinuz-7.2.8-test	"
+expect "SAVED: an empty value is ignored, not an override"                  0 check "$BARE"
+rm -f "$T/nightfall-cmdline"
+expect "SAVED: no nightfall-cmdline file refuses as before"                 3 check "$BARE"
 
 # Allowed on purpose.
 entry ""

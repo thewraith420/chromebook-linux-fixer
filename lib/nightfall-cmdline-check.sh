@@ -60,11 +60,44 @@ case "$cmdline" in
         exit 1 ;;
 esac
 
+# The saved per-kernel command line for the running kernel, from Nightfall's
+# own nightfall-cmdline: keyed by the /vmlinuz-<release> suffix, last line
+# wins, empty values ignored. Must match install-nightfall.sh's
+# saved_override_for_running() and same_cmdline() exactly (nightfall-boot-manager
+# 46d3fd3), or the two refuse different boots.
+saved_override_for_running() {
+    local file="${NF_CMDLINE_FILE:-${FIXER_BOOT_DIR:-/boot}/nightfall-cmdline}"
+    local rel="${FIXER_RUNNING_KERNEL:-$(uname -r 2>/dev/null || true)}"
+    [ -n "$rel" ] && [ -f "$file" ] || return 0
+    awk -F'\t' -v suffix="/vmlinuz-$rel" '
+        $2 != "" {
+            k = $1
+            if (length(k) >= length(suffix) && substr(k, length(k) - length(suffix) + 1) == suffix)
+                v = $2
+        }
+        END { if (v != "") print v }' "$file"
+}
+same_cmdline() {
+    norm() { printf '%s\n' "$1" | sed 's/BOOT_IMAGE=[^ ]* //; s/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'; }
+    [ "$(norm "$1")" = "$(norm "$2")" ]
+}
+
 if [ -z "$running" ] && [ -n "$existing" ]; then
+    # A bare boot that IS this kernel's saved override is a deliberate,
+    # persistent choice (Bob's Slate boots 7.2.8 bare this way), not a one-off
+    # edit - carry it forward rather than refuse it on every update.
+    saved=$(saved_override_for_running)
+    if [ -n "$saved" ] && same_cmdline "$(cat "$PROC")" "$saved"; then
+        echo "This boot's command line is this kernel's saved override in nightfall-cmdline:"
+        echo "a deliberate choice, not a one-off edit, so Nightfall's entry will carry no"
+        echo "i915 options (it currently has: $existing)."
+        exit 0
+    fi
     echo "This boot carries no i915 options, but Nightfall's entry has: $existing"
-    echo "Installing would drop them. That usually means a one-time edited command"
-    echo "line rather than a real change - reboot normally and apply from there, or"
-    echo "set NIGHTFALL_CMDLINE if the entry really should carry none."
+    echo "This boot's command line is not this kernel's saved override either, so"
+    echo "nothing says a bare command line is what Nightfall should carry, and"
+    echo "dropping them could leave Nightfall dark. Choose explicitly: keep them or"
+    echo "drop them (NIGHTFALL_CMDLINE, or the GUI's Keep/Drop choice)."
     echo "NF_I915_ENTRY=$existing"
     exit 3
 fi
