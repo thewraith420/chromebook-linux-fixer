@@ -531,8 +531,8 @@ class Window(Adw.ApplicationWindow):
         to remove one.
 
         Removing is the only thing in this window that can leave the machine
-        unable to boot, so the button is missing rather than disabled-looking
-        where it must not be used: the running kernel and the last one.
+        unable to boot, so the running kernel and the last one get no Remove.
+        A disabled "Active" (or "Only one") sits in its place instead.
         """
         self._kernels_group = Adw.PreferencesGroup(
             title="Kernels",
@@ -634,6 +634,9 @@ class Window(Adw.ApplicationWindow):
         self._kernels_hint.set_visible(False)
 
         installed = [e for e in entries if e[4] == "kernel"]
+        # Remove and its "Active" stand-in share one width, so every row's
+        # last button lines up.
+        last_slot = self._kernel_slot_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         for release, size, package, flags, kind in entries:
             size = int(size) if size.isdigit() else 0
             human = (f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB")
@@ -686,10 +689,22 @@ class Window(Adw.ApplicationWindow):
                             lambda _b, r=release, hv="cmdline-override" in flag_set:
                             self._edit_kernel_cmdline(r, hv))
                 box.append(edit)
-            # No Remove where it must not happen. A greyed-out button invites a
-            # click and explains nothing; the subtitle already says why.
+            # No Remove where it must not happen. In its place, a disabled
+            # button that says why (Bob, 2026-10-07): a greyed-out "Remove"
+            # would invite a click and explain nothing, but "Active" is a
+            # status, and keeps the row lined up with the others.
             removable = kind in ("modules", "cmdline") or (
                 kind == "kernel" and "running" not in flag_set and len(installed) > 1)
+            if not removable and kind == "kernel":
+                running = "running" in flag_set
+                hold = Gtk.Button(label="Active" if running else "Only one",
+                                  valign=Gtk.Align.CENTER, sensitive=False)
+                hold.set_tooltip_text(
+                    "This is the kernel running now, so it cannot be removed"
+                    if running else
+                    "This is the only kernel installed, so it cannot be removed")
+                last_slot.add_widget(hold)
+                box.append(hold)
             if removable:
                 # For kind "cmdline", `release` here is actually the stored
                 # key (a path, e.g. /boot/vmlinuz-<release>) - lib/kernels.sh
@@ -700,6 +715,7 @@ class Window(Adw.ApplicationWindow):
                 target = release.split("vmlinuz-", 1)[-1] if kind == "cmdline" else release
                 rm = Gtk.Button(label="Remove", valign=Gtk.Align.CENTER)
                 rm.add_css_class("destructive-action")
+                last_slot.add_widget(rm)
                 rm.connect("clicked",
                            lambda _b, r=target, h=human, k=kind, p=package:
                            self._confirm_remove_kernel(r, h, k, p))
