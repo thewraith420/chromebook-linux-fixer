@@ -506,11 +506,45 @@ class Window(Adw.ApplicationWindow):
         cmd = [cli, "--no-colour", "update", key, "--yes"]
         if nightfall_cmdline is not None:
             cmd += ["--nightfall-cmdline", nightfall_cmdline]
-        on_exit = self._offer_i915_choice if key == "nightfall" else None
+        if key == "nightfall":
+            on_exit = self._offer_i915_choice
+        else:
+            before = self._toolkit_head()
+            on_exit = lambda rc, _out, b=before: self._offer_restart(rc, b)
         self._run_in_window(f"update {key}", cmd, stream=True,
                             refresh_after=True, on_exit=on_exit)
         # refresh_after re-sweeps the fixes; the update check is separate.
         GLib.timeout_add_seconds(2, self.check_updates)
+
+    @staticmethod
+    def _toolkit_head():
+        try:
+            return subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    def _offer_restart(self, rc, before):
+        """
+        After a toolkit update that actually changed the code, offer to restart
+        into it: this process is still running the old version. Judged by the
+        git commit, not by the update's output, so a no-op update never asks.
+        """
+        if rc != 0 or not before or self._toolkit_head() in ("", before):
+            return None
+        dialog = Adw.AlertDialog(
+            heading="Restart Nightfall Toolkit?",
+            body="The update is installed, but this window is still running the "
+                 "old version. Restart now to use the new one.")
+        dialog.add_response("later", "Later")
+        dialog.add_response("restart", "Restart Now")
+        dialog.set_response_appearance("restart", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("restart")
+        dialog.set_close_response("later")
+        dialog.connect("response", lambda _d, r:
+                       self.get_application().restart() if r == "restart" else None)
+        dialog.present(self.get_application().get_active_window() or self)
+        return None
 
     def _offer_i915_choice(self, rc, output):
         """
@@ -1823,6 +1857,12 @@ class Application(Adw.Application):
     def __init__(self):
         super().__init__(application_id="io.github.thewraith420.NightfallToolkit")
         self._styled = False
+        self.restart_requested = False
+
+    def restart(self):
+        """Quit, and have __main__ start the (updated) app in this process."""
+        self.restart_requested = True
+        self.quit()
 
     def do_activate(self):
         if not self._styled:
@@ -1855,4 +1895,15 @@ class Application(Adw.Application):
 
 
 if __name__ == "__main__":
-    sys.exit(Application().run(None))
+    app = Application()
+    rc = app.run(None)
+    if app.restart_requested:
+        # Replace this process rather than start a second one: a second
+        # instance would find this one still registered and just hand over
+        # to it. The path is re-resolved so a renamed launcher still works.
+        target = REPO / "bin" / "nightfall-toolkit-gui"
+        if not target.exists():
+            import shutil
+            target = Path(shutil.which("nightfall-toolkit-gui") or target)
+        os.execv(sys.executable, [sys.executable, str(target)])
+    sys.exit(rc)
