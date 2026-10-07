@@ -363,7 +363,7 @@ class Window(Adw.ApplicationWindow):
         toolbar.add_top_bar(header)
         toolbar.set_content(Gtk.ScrolledWindow(child=page, vexpand=True))
 
-        return Adw.NavigationPage(child=toolbar, title="Nightfall Boot Manager")
+        return Adw.NavigationPage(child=toolbar, title="Nightfall Toolkit")
 
     def _build_updates(self):
         """

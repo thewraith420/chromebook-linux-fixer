@@ -107,8 +107,12 @@ class Machine:
         # "Lenovo LOQ 15IRH8"). Not every machine sets this meaningfully -
         # Chromebooks mostly do not - so fall back to the bare product_name
         # exactly as before when it is blank or identical.
+        # A family that already contains the model name adds nothing: the
+        # Slate reports product_family "Google_Nocturne" for product
+        # "Nocturne", which read as "Google Google_Nocturne (Nocturne)".
         name = self.product
-        if self.product_family and self.product_family != self.product:
+        if (self.product_family
+                and self.product.lower() not in self.product_family.lower()):
             name = f"{self.product_family} ({self.product})"
         return (f"{self.vendor} {name}"
                 f" (board {self.board}, {self.bios_vendor} {self.bios_version})")

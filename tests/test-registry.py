@@ -59,6 +59,14 @@ m = machine(vendor="Dell", product="XPS 13", board="0ABC",
 expect("product_family == product_name: falls back, no redundant '(XPS 13)'",
        m.describe(), "Dell XPS 13 (board 0ABC, Dell 1.0)")
 
+# ---- a family that just repeats the model, decorated: the real Pixel Slate
+# (MrChromebox 2609) reports product_family "Google_Nocturne" ---------------
+m = machine(vendor="Google", product="Nocturne", board="Nocturne",
+           bios_vendor="coreboot", bios_version="MrChromebox-2609.0",
+           product_family="Google_Nocturne")
+expect("product_family containing product_name: not repeated",
+       m.describe(), "Google Nocturne (board Nocturne, coreboot MrChromebox-2609.0)")
+
 # ---- `product` (the matching field) is never touched by any of the above -
 for pf in ("", "LOQ 15IRH8", "82XV"):
     m = machine(product="82XV", product_family=pf)
