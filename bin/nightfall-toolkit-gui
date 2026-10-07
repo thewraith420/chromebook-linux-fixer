@@ -666,8 +666,8 @@ class Window(Adw.ApplicationWindow):
                 notes = []
                 if "running" in flag_set:
                     notes.append("running now")
-                if "default" in flag_set:
-                    notes.append("Nightfall boots this first")
+                # No "Nightfall boots this first" note: the greyed "Default"
+                # button on this row already says it.
                 if "no-initrd" in flag_set:
                     notes.append("no initrd")
                 parts = [human] + ([package] if package else []) + notes
