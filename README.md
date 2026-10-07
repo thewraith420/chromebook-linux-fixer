@@ -170,7 +170,7 @@ nightfall-toolkit update nightfall        # newest Nightfall source and kernel, 
   shell or a rescue boot.
 - **Panel options are your call.** If Nightfall's entry carries `i915.*`
   options this boot lacks, the update stops instead of silently dropping them.
-  The GUI then asks **Keep them** or **Drop them**. On the command line:
+  The GUI then asks **Keep Them** or **Drop Them**. On the command line:
   `update nightfall --nightfall-cmdline "<options>"` keeps them, and
   `--nightfall-cmdline ""` drops them.
 

@@ -30,7 +30,7 @@ for f in vmlinuz initramfs.img; do
     [ -r "$PICKER_DIR/$f" ] || MISSING="$MISSING $PICKER_DIR/$f"
 done
 if [ -n "$MISSING" ]; then
-    echo "picker entry present but its files are missing:$MISSING"
+    echo "Nightfall's GRUB entry is there, but its files are missing:$MISSING"
     exit 1
 fi
 
@@ -47,16 +47,20 @@ OUTCOME=""
 [ -n "$LOG" ] && OUTCOME=$(sed -n 's/^outcome:[[:space:]]*//p' "$LOG" | head -1)
 
 DEFAULT=$(grep -hE '^GRUB_DEFAULT=' /etc/default/grub 2>/dev/null | cut -d= -f2- | tr -d '"')
-echo "Nightfall installed [$NAME] ($(du -h "$PICKER_DIR/vmlinuz" | cut -f1) kernel,"\
-     "$(du -h "$PICKER_DIR/initramfs.img" | cut -f1) initramfs)"
+# A bad last boot goes first: the GUI shows only a check's first line, so a
+# warning printed after the "installed" line never reached it.
+case "$OUTCOME" in
+    *fallback*|*failed*|*error*)
+        echo "Warning: the last boot through Nightfall ended in: $OUTCOME"
+        echo "see 'nightfall-toolkit logs nightfall' for why" ;;
+esac
+echo "Nightfall is installed ($(du -h "$PICKER_DIR/vmlinuz" | cut -f1) kernel,"\
+     "$(du -h "$PICKER_DIR/initramfs.img" | cut -f1) boot image)"
 case "$DEFAULT" in
     picker|nightfall) echo "and it is the default GRUB entry" ;;
     *)      echo "selectable from the GRUB menu; not the default" ;;
 esac
 case "$OUTCOME" in
-    "")      ;;                       # never booted through it, or no log
-    *fallback*|*failed*|*error*)
-        echo "WARNING: last boot through it ended in: $OUTCOME"
-        echo "see 'nightfall-toolkit logs nightfall' for why" ;;
+    ""|*fallback*|*failed*|*error*) ;;   # none yet, or already said above
     *)       echo "last boot through it: $OUTCOME" ;;
 esac

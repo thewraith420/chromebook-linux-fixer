@@ -31,15 +31,17 @@ from registry import (CATEGORIES, Machine, load_fixes, STATE_DIR,  # noqa: E402
 DISCLAIMER = """\
 nightfall-toolkit makes LOW-LEVEL CHANGES to this system.
 
-Depending on the fix, that can mean replacing system libraries, editing udev
-rules, patching vendor scripts, or altering kernel behaviour. Some fixes touch
+Depending on what you apply, that can mean adding a boot entry, replacing
+system libraries, editing udev rules, patching vendor scripts, or altering
+kernel behaviour. Some fixes touch
 hardware that is poorly supported on Linux, and a bad interaction can HARD LOCK
 the machine, requiring a forced power-off. A forced power-off can corrupt a
 filesystem or lose unsaved work.
 
-This tool is developed and tested on ONE machine (Google Nocturne). Fixes are
-gated on hardware detection, but detection is imperfect and your hardware may
-differ in ways the author never saw.
+Nightfall runs on any x86-64-v2 PC with GRUB and has been tested on TWO (a
+Pixel Slate and a Lenovo LOQ). The hardware fixes are developed and tested on
+ONE machine, the Pixel Slate. Every fix is gated on hardware detection, but
+detection is imperfect and your hardware may differ in ways never seen here.
 
   * Read what a fix does before applying it: nightfall-toolkit list -v
   * Every fix that can be reverted says so; some cannot be.

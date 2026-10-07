@@ -33,20 +33,22 @@ from registry import CATEGORIES, Machine, load_fixes, STATE_DIR  # noqa: E402
 # and then exit 1 once the pipe closed, with nothing on screen explaining why.
 DISCLAIMER_STAMP = STATE_DIR / "disclaimer-accepted"
 DISCLAIMER_TEXT = """\
-This tool makes low-level changes to your system: replacing system \
-libraries, editing udev rules, patching vendor scripts, or altering kernel \
-behaviour, depending on the fix.
+This tool makes low-level changes to your system: adding a boot entry, \
+replacing system libraries, editing udev rules, patching vendor scripts, or \
+altering kernel behaviour, depending on what you apply.
 
 Some fixes touch hardware that is poorly supported on Linux. A bad \
 interaction can hard lock the machine, requiring a forced power-off, which \
 can corrupt a filesystem or lose unsaved work.
 
-This is developed and tested on one machine. Fixes are gated on hardware \
-detection, but detection is imperfect and your hardware may differ in ways \
-never seen here.
+Nightfall runs on any x86-64-v2 PC with GRUB, and has been tested on two: \
+a Pixel Slate and a Lenovo LOQ. The hardware fixes are developed and tested \
+on one machine, the Pixel Slate. Every fix is gated on hardware detection, \
+but detection is imperfect and your hardware may differ in ways never seen \
+here.
 
 Every fix that can be reverted says so; some cannot be. There is no \
-warranty - you are responsible for your own machine."""
+warranty — you are responsible for your own machine."""
 
 RISK_STYLE = {"low": "success", "medium": "warning", "high": "error"}
 STATE_TEXT = {
@@ -78,7 +80,7 @@ def askpass_env():
 
 class FixRow(Adw.ExpanderRow):
     def __init__(self, fix, window):
-        super().__init__(title=fix.name, subtitle=fix.id)
+        super().__init__(title=fix.name)
         self.fix = fix
         self.window = window
 
@@ -86,10 +88,13 @@ class FixRow(Adw.ExpanderRow):
         self.state_label.add_css_class("dim-label")
         self.add_suffix(self.state_label)
 
-        risk = Gtk.Label(label=fix.risk)
-        risk.add_css_class(RISK_STYLE.get(fix.risk, "dim-label"))
-        risk.add_css_class("caption")
-        self.add_suffix(risk)
+        # Shown only while there is a decision to make: next to "Applied" a
+        # red "high" read as an alarm on a perfectly healthy install.
+        self.risk_label = Gtk.Label(label=f"{fix.risk.capitalize()} risk",
+                                    visible=False)
+        self.risk_label.add_css_class(RISK_STYLE.get(fix.risk, "dim-label"))
+        self.risk_label.add_css_class("caption")
+        self.add_suffix(self.risk_label)
 
         if fix.description:
             self.add_row(self._text_row(fix.description))
@@ -99,6 +104,10 @@ class FixRow(Adw.ExpanderRow):
             self.add_row(warn)
         if not fix.reverts_cleanly:
             self.add_row(self._text_row("This fix cannot be cleanly reverted."))
+        # The id is what the command line takes; kept out of the subtitle.
+        cli_row = self._text_row(f"On the command line: nightfall-toolkit apply {fix.id}")
+        cli_row.add_css_class("dim-label")
+        self.add_row(cli_row)
 
         actions = Adw.ActionRow()
         box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
@@ -145,8 +154,11 @@ class FixRow(Adw.ExpanderRow):
         for s in ("success", "warning", "dim-label"):
             self.state_label.remove_css_class(s)
         self.state_label.add_css_class(style)
+        self.risk_label.set_visible(state in ("needed", "unknown"))
         if detail:
-            self.set_subtitle(f"{self.fix.id} — {detail.splitlines()[0]}")
+            # Plain text: row subtitles are Pango markup, and a check's
+            # output can contain <, > or &.
+            self.set_subtitle(GLib.markup_escape_text(detail.splitlines()[0]))
         self.apply_btn.set_sensitive(state in ("needed", "unknown")
                                      and self.fix.has("apply"))
         self.revert_btn.set_sensitive(state == "applied" and self.fix.has("revert"))
@@ -265,6 +277,14 @@ class Window(Adw.ApplicationWindow):
     # rather than appearing in both places.
     NIGHTFALL_FIXES = ("nightfall", "nightfall-default")
 
+    # Progress-window titles for a fix action: "Applying <fix name>".
+    ACTION_TITLES = {"apply": "Applying", "revert": "Reverting", "verify": "Checking"}
+
+    @staticmethod
+    def _short_name(fix):
+        """A fix's name without its parenthetical, for window titles."""
+        return fix.name.split(" (")[0]
+
     def _build_root(self):
         """
         Home is Nightfall: what it is doing, and everything that changes it.
@@ -315,7 +335,7 @@ class Window(Adw.ApplicationWindow):
         # above it, is Nightfall's.
         nf = Adw.PreferencesGroup(
             title="Install Boot Manager",
-            description="A boot manager for kernels, backups and repair - touch, "
+            description="A boot manager for kernels, backups and repair — touch, "
                         "keyboard or mouse. Nothing is changed until you press "
                         "Apply.")
         nf.add_css_class("nightfall-heading")
@@ -489,10 +509,10 @@ class Window(Adw.ApplicationWindow):
             return
         dialog = Adw.MessageDialog(
             transient_for=self, heading="Update Nightfall?",
-            body="This pulls Nightfall's source, downloads the newest kernel "
-                 "release, rebuilds the boot UI and initramfs, and replaces "
-                 "what is in /boot/nightfall. The kernel it replaces is kept "
-                 "as vmlinuz.previous. Your other boot entries are not touched.")
+            body="This downloads the newest Nightfall and its kernel, builds it "
+                 "for this machine and installs it in place of the current one. "
+                 "The kernel it replaces is kept in /boot/nightfall, so you can "
+                 "go back to it. Your other boot entries are not touched.")
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("go", "Update")
         dialog.set_response_appearance("go", Adw.ResponseAppearance.SUGGESTED)
@@ -511,7 +531,8 @@ class Window(Adw.ApplicationWindow):
         else:
             before = self._toolkit_head()
             on_exit = lambda rc, _out, b=before: self._offer_restart(rc, b)
-        self._run_in_window(f"update {key}", cmd, stream=True,
+        what = "Nightfall" if key == "nightfall" else "Nightfall Toolkit"
+        self._run_in_window(f"Updating {what}", cmd, stream=True,
                             refresh_after=True, on_exit=on_exit)
         # refresh_after re-sweeps the fixes; the update check is separate.
         GLib.timeout_add_seconds(2, self.check_updates)
@@ -560,13 +581,13 @@ class Window(Adw.ApplicationWindow):
         dialog = Adw.MessageDialog(
             transient_for=self, heading="Keep the panel options?",
             body=f"Nightfall's boot entry has {options}, but this boot has none.\n\n"
-                 "Keep them: the entry keeps these options, as it does now.\n\n"
-                 "Drop them: the entry carries none. Choose this only if this "
-                 "kernel lights the panel without them - otherwise Nightfall "
-                 "may come up dark.")
+                 "Keep Them: the entry keeps these options, as it does now.\n\n"
+                 "Drop Them: the entry carries none. Choose this only if this "
+                 "kernel lights the screen without them — otherwise Nightfall "
+                 "may start with a black screen.")
         dialog.add_response("cancel", "Cancel")
-        dialog.add_response("keep", "Keep them")
-        dialog.add_response("drop", "Drop them")
+        dialog.add_response("keep", "Keep Them")
+        dialog.add_response("drop", "Drop Them")
         dialog.set_response_appearance("drop", Adw.ResponseAppearance.DESTRUCTIVE)
         dialog.set_default_response("keep")
         dialog.connect("response", lambda _d, r: {
@@ -587,18 +608,18 @@ class Window(Adw.ApplicationWindow):
         """
         self._kernels_group = Adw.PreferencesGroup(
             title="Manage Kernels",
-            description="What is installed, and which one Nightfall boots "
-                        "first. Removing one frees its modules and initrd too.")
+            description="The kernels installed here, and which one Nightfall "
+                        "boots first. Removing a kernel removes its modules and "
+                        "boot image too.")
 
         install_row = Adw.ActionRow(
             title="Install a kernel",
             # &lt; / &gt;: a subtitle is Pango markup, so a bare <release>
             # is parsed as a tag and the whole text is dropped with a warning.
-            subtitle="From a tarball holding boot/vmlinuz-&lt;release&gt; and "
-                     "lib/modules/&lt;release&gt;/ - a BobZKernel portable "
-                     "installer works as-is.")
+            subtitle="From a BobZKernel installer (.tar.gz), or any tarball "
+                     "laid out the same way.")
         install_row.set_subtitle_lines(0)
-        install_btn = Gtk.Button(label="Choose file…", valign=Gtk.Align.CENTER)
+        install_btn = Gtk.Button(label="Choose File…", valign=Gtk.Align.CENTER)
         install_btn.connect("clicked", lambda _b: self._pick_kernel_tarball())
         install_row.add_suffix(install_btn)
         self._kernels_group.add(install_row)
@@ -632,8 +653,8 @@ class Window(Adw.ApplicationWindow):
         dialog = Adw.MessageDialog(
             transient_for=self, modal=True,
             heading=f"Install {name}?",
-            body="Extracts the kernel and its modules, then rebuilds the "
-                "initramfs and GRUB's menu - a few minutes, mostly reading "
+            body="Extracts the kernel and its modules, then builds its boot "
+                "image and adds it to GRUB's menu. This takes a few minutes, mostly reading "
                 "and writing to the disk this runs from. Do not power off "
                 "while it runs.\n\nAdditive: every other installed kernel "
                 "is left exactly as it is, including the one you would fall "
@@ -649,7 +670,7 @@ class Window(Adw.ApplicationWindow):
 
     def _install_kernel(self, path):
         cli = CLI
-        self._run_in_window(f"install kernel from {Path(path).name}",
+        self._run_in_window(f"Installing {Path(path).name}",
                             [cli, "--no-colour", "kernels", "--install", path],
                             stream=True, refresh_after=True)
 
@@ -677,8 +698,8 @@ class Window(Adw.ApplicationWindow):
         if not entries:
             self._kernels_hint.set_title("No kernels found")
             self._kernels_hint.set_subtitle(
-                "Nothing matching /boot/vmlinuz-* - unusual enough that it is "
-                "probably worth looking at from a terminal.")
+                "Nothing matches /boot/vmlinuz-*. That is unusual enough to be "
+                "worth looking at from a terminal.")
             self._kernels_hint.set_subtitle_lines(0)
             self._kernels_hint.set_visible(True)
             return False
@@ -786,7 +807,7 @@ class Window(Adw.ApplicationWindow):
 
     def _set_default_kernel(self, release):
         cli = CLI
-        self._run_in_window(f"default kernel {release}",
+        self._run_in_window(f"Making {release} the Default",
                             [cli, "--no-colour", "kernels", "--default", release],
                             stream=False, refresh_after=True)
 
@@ -896,13 +917,13 @@ class Window(Adw.ApplicationWindow):
         # rather than letting the file format split silently.
         value = " ".join(value.splitlines()).strip()
         cli = CLI
-        self._run_in_window(f"cmdline {release}",
+        self._run_in_window(f"Saving the Command Line for {release}",
                             [cli, "--no-colour", "kernels", "--cmdline", release, "--set", value],
                             stream=True, refresh_after=True)
 
     def _reset_kernel_cmdline(self, release):
         cli = CLI
-        self._run_in_window(f"reset cmdline {release}",
+        self._run_in_window(f"Clearing the Saved Command Line for {release}",
                             [cli, "--no-colour", "kernels", "--cmdline", release, "--reset"],
                             stream=True, refresh_after=True)
 
@@ -941,7 +962,7 @@ class Window(Adw.ApplicationWindow):
 
     def _remove_kernel(self, release):
         cli = CLI
-        self._run_in_window(f"remove kernel {release}",
+        self._run_in_window(f"Removing {release}",
                             [cli, "--no-colour", "kernels", "--remove", release, "--yes"],
                             stream=True, refresh_after=True)
 
@@ -963,8 +984,9 @@ class Window(Adw.ApplicationWindow):
         self._backups_group = Adw.PreferencesGroup(
             visible=self._backups_supported(),
             title="Backups",
-            description="Taken by Nightfall onto an external drive. "
-                        "Nightfall takes and restores them; this frees space.")
+            description="Backups Nightfall has saved to external drives. Taking "
+                        "and restoring them happens in Nightfall itself; here you "
+                        "can delete the ones you no longer need.")
         self._backup_rows = []
         self._backups_hint = Adw.ActionRow(title="Checking for backup drives…")
         self._backups_group.add(self._backups_hint)
@@ -1000,7 +1022,7 @@ class Window(Adw.ApplicationWindow):
             self._backups_hint.set_title("No backups found")
             self._backups_hint.set_subtitle(
                 "Nightfall writes them to a folder called nocturne-backups on an "
-                "external drive. Plug that drive in - if the desktop does not mount "
+                "external drive. Plug that drive in; if the desktop does not mount "
                 "it by itself, open it in Files once.")
             self._backups_hint.set_subtitle_lines(0)
             self._backups_hint.set_visible(True)
@@ -1038,7 +1060,7 @@ class Window(Adw.ApplicationWindow):
         body = (f"{human} on {directory}.\n\nThis cannot be undone.")
         if state == "incomplete":
             body = (f"{human} on {directory}.\n\nThis backup never finished, so "
-                    f"nothing can be restored from it - deleting it only frees "
+                    f"nothing can be restored from it, so deleting it only frees "
                     f"the space. This cannot be undone.")
         dialog = Adw.MessageDialog(
             transient_for=self, modal=True,
@@ -1056,7 +1078,7 @@ class Window(Adw.ApplicationWindow):
 
     def _delete_backup(self, directory, name):
         cli = CLI
-        self._run_in_window(f"delete backup {name}",
+        self._run_in_window(f"Deleting Backup {name}",
                             [cli, "--no-colour", "backups", "--delete", name,
                              "--dir", directory, "--yes"],
                             stream=False, refresh_after=True)
@@ -1187,7 +1209,7 @@ class Window(Adw.ApplicationWindow):
     @staticmethod
     def _source_note(source):
         return {"file": "", "default": " (default)",
-                "ignored": " (default - the file on /boot was not valid)"}[source]
+                "ignored": " (default; the file on /boot was not valid)"}[source]
 
     @staticmethod
     def _grub_timeout():
@@ -1311,7 +1333,7 @@ class Window(Adw.ApplicationWindow):
                         "Takes effect on the next boot through it.")
         h["hint"] = Adw.ActionRow(
             title="Nightfall is not installed",
-            subtitle="Install it from the home page first - its settings appear "
+            subtitle="Install it from the home page first; its settings appear "
                      "here once it is.")
         nf.add(h["hint"])
 
@@ -1362,7 +1384,7 @@ class Window(Adw.ApplicationWindow):
 
         h["nightfall_rows"] = [
             timeout_row("nightfall", "Menu timeout", 0,
-                        "0 never auto-boots - it waits for a tap forever"),
+                        "0 never auto-boots; it waits for a tap forever"),
             h["rotate_row"],
             h["autorotate_row"],
             h["splash_row"],
@@ -1462,7 +1484,8 @@ class Window(Adw.ApplicationWindow):
     def _run_boot_menu(self, flag, value, extra=()):
         cli = CLI
         cmd = [cli, "--no-colour", "boot-menu", f"--{flag}", str(value), *extra]
-        self._run_in_window(f"boot-menu {flag}", cmd,
+        what = "GRUB Settings" if flag == "grub" else "Nightfall Settings"
+        self._run_in_window(f"Saving {what}", cmd,
                             stream=False, refresh_after=True)
 
     def _set_timeout(self, key, spin):
@@ -1475,11 +1498,11 @@ class Window(Adw.ApplicationWindow):
                 transient_for=self, modal=True,
                 heading="Never auto-boot?",
                 body="0 does not boot immediately. It disables Nightfall's "
-                     "auto-boot, so the menu waits for a tap forever. "
-                     "If the touchscreen ever fails, this machine has no "
-                     "keyboard to get past it.")
+                     "auto-boot, so the menu waits for a tap forever. If the "
+                     "touchscreen stops working and no keyboard is attached, "
+                     "nothing can get past it.")
             dialog.add_response("cancel", "Cancel")
-            dialog.add_response("go", "Set anyway")
+            dialog.add_response("go", "Set Anyway")
             dialog.set_response_appearance("go", Adw.ResponseAppearance.DESTRUCTIVE)
             # Cancel on Enter and on Escape. The dangerous answer should never
             # be the one a stray keypress or a dismissed dialog produces.
@@ -1714,7 +1737,7 @@ class Window(Adw.ApplicationWindow):
 
     def _execute(self, action, fix):
         cli = CLI
-        self._run_in_window(f"{action} {fix.id}",
+        self._run_in_window(f"{self.ACTION_TITLES.get(action, action.capitalize())} {self._short_name(fix)}",
                             [cli, "--no-colour", action, fix.id, "--yes"])
 
     def view_logs(self, fix):
@@ -1728,7 +1751,7 @@ class Window(Adw.ApplicationWindow):
         this runs on.
         """
         cli = CLI
-        self._run_in_window(f"logs {fix.id}",
+        self._run_in_window(f"{self._short_name(fix)}: Log",
                             [cli, "--no-colour", "logs", fix.id],
                             stream=False, refresh_after=False)
 
@@ -1744,7 +1767,7 @@ class Window(Adw.ApplicationWindow):
         tv.add_top_bar(Adw.HeaderBar())
 
         bar = Gtk.ProgressBar(margin_top=12)
-        step = Gtk.Label(label=f"Starting {title}...", wrap=True,
+        step = Gtk.Label(label="Starting…", wrap=True,
                          justify=Gtk.Justification.CENTER)
         step.add_css_class("dim-label")
         # Shown once the command ends: a plain "Finished." gave no hint

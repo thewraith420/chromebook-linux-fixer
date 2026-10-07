@@ -20,7 +20,7 @@ case "$LINE" in
     *"$MARK"*)
         echo "GRUB boots Nightfall by default (set by this fix)" ;;
     *)
-        echo "GRUB already boots Nightfall by default, set by hand rather than"
-        echo "by this fix - nothing here to revert"
+        # One line: the GUI shows a check's first line as the row's subtitle.
+        echo "GRUB already boots Nightfall by default (set by hand, not by this fix, so there is nothing to revert)"
         exit 3 ;;
 esac
