@@ -523,6 +523,7 @@ class Window(Adw.ApplicationWindow):
             "drop": lambda: self._run_update("nightfall", ""),
         }.get(r, lambda: None)())
         dialog.present()
+        return "Not installed yet: waiting for your choice about the panel options"
 
     def _build_kernels(self):
         """
@@ -1645,6 +1646,12 @@ class Window(Adw.ApplicationWindow):
         step = Gtk.Label(label=f"Starting {title}...", wrap=True,
                          justify=Gtk.Justification.CENTER)
         step.add_css_class("dim-label")
+        # Shown once the command ends: a plain "Finished." gave no hint
+        # whether it had worked, and the exit code sat in collapsed Details.
+        result_icon = Gtk.Image(pixel_size=32, visible=False)
+        result = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER,
+                           visible=False)
+        result.add_css_class("title-4")
 
         buf = Gtk.TextBuffer()
         view = Gtk.TextView(buffer=buf, editable=False, monospace=True,
@@ -1656,6 +1663,8 @@ class Window(Adw.ApplicationWindow):
                        margin_top=24, margin_bottom=12,
                        margin_start=24, margin_end=24)
         body.append(bar)
+        body.append(result_icon)
+        body.append(result)
         body.append(step)
         body.append(details)
         tv.set_content(body)
@@ -1684,16 +1693,28 @@ class Window(Adw.ApplicationWindow):
             step.set_label(text)
             return False
 
-        def finish(rc):
+        def finish(rc, output):
             running[0] = False
             bar.set_fraction(1.0)
+            # on_exit may take over a non-zero exit (a follow-up question
+            # rather than a failure) by returning the line to show instead.
+            note = on_exit(rc, output) if on_exit and rc is not None else None
             if rc == 0:
-                step.set_label("Finished.")
+                icon, css, text = "object-select-symbolic", "success", "Succeeded"
+            elif note:
+                icon, css, text = "dialog-question-symbolic", "warning", note
             elif rc is None:
-                step.set_label("Could not run it - see Details.")
-                details.set_expanded(True)
+                icon, css, text = "dialog-error-symbolic", "error", "Failed: could not run it"
             else:
-                step.set_label(f"Stopped (exit {rc}) - see Details.")
+                icon, css, text = "dialog-error-symbolic", "error", f"Failed (exit {rc})"
+            result_icon.set_from_icon_name(icon)
+            result_icon.add_css_class(css)
+            result.set_label(text)
+            result.add_css_class(css)
+            result_icon.set_visible(True)
+            result.set_visible(True)
+            if rc != 0 and not note:
+                step.set_label("The output below says why.")
                 details.set_expanded(True)
             close.set_sensitive(True)
             return False
@@ -1721,11 +1742,9 @@ class Window(Adw.ApplicationWindow):
                     GLib.idle_add(append, out)
                 rc = proc.returncode
                 GLib.idle_add(append, f"\n[finished, exit {rc}]\n")
-                if on_exit:
-                    GLib.idle_add(on_exit, rc, "".join(captured))
             except Exception as exc:                      # noqa: BLE001
                 GLib.idle_add(append, f"\nfailed to run: {exc}\n")
-            GLib.idle_add(finish, rc)
+            GLib.idle_add(finish, rc, "".join(captured))
             if refresh_after:
                 GLib.idle_add(self.refresh_all)
 
