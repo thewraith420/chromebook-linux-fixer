@@ -45,3 +45,5 @@ jobs:
         run: ./tests/test-waydroid-lxc-hook.sh
       - name: Machine Specs display (friendly model name, matching unaffected)
         run: ./tests/test-registry.py
+      - name: Machine Specs (model name, CPU, memory, graphics, firmware)
+        run: ./tests/test-specs.py

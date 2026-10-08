@@ -72,6 +72,7 @@ class Machine:
     # `product`, i.e. product_name, same as always; applies_to: {product:
     # "nocturne"} and similar must keep matching exactly as before).
     product_family: str = ""
+    product_version: str = ""     # display only, like product_family
 
     @classmethod
     def detect(cls) -> "Machine":
@@ -83,6 +84,7 @@ class Machine:
             bios_version=dmi("bios_version"),
             kernel=os.uname().release,
             product_family=dmi("product_family"),
+            product_version=dmi("product_version"),
         )
 
     @property

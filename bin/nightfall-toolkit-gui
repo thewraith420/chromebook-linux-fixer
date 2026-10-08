@@ -22,6 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 CLI = str(REPO / "bin" / "nightfall-toolkit")
 sys.path.insert(0, str(REPO / "lib"))
 from registry import CATEGORIES, Machine, load_fixes, STATE_DIR  # noqa: E402
+import specs  # noqa: E402
 
 # The same one-time acknowledgement bin/nightfall-toolkit's first_run_gate()
 # requires before any apply/revert, and the same stamp file - so accepting it
@@ -314,9 +315,16 @@ class Window(Adw.ApplicationWindow):
             if fixes:
                 self.fixes_by_category[key] = fixes
 
+        # One expandable row, titled with the model and summarised in a line,
+        # so the full specs do not lengthen home. Plain text (no markup) and
+        # selectable, so they can be copied into a bug report.
         info = Adw.PreferencesGroup(title="Machine Specs")
-        info.add(self._row("Model", self.machine.describe()))
-        info.add(self._row("Kernel", self.machine.kernel))
+        model, summary, spec_rows = specs.gather(self.machine)
+        specs_row = Adw.ExpanderRow(title=model, subtitle=summary, use_markup=False)
+        for label, value in spec_rows:
+            specs_row.add_row(Adw.ActionRow(title=label, subtitle=value,
+                                            use_markup=False, subtitle_selectable=True))
+        info.add(specs_row)
         # The not-a-Chromebook warning is about the hardware fixes, so it
         # lives on their page (_build_fixes_page), not on home.
 
